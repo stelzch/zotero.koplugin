@@ -3,6 +3,7 @@ local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local CenterContainer = require("ui/widget/container/centercontainer")
 local LuaSettings = require("frontend/luasettings")
 local DataStorage = require("datastorage")
 local SQ3 = require("lua-ljsqlite3/init")
@@ -17,6 +18,8 @@ local Screen = Device.screen
 local Font = require("ui/font")
 local Menu = require("ui/widget/menu")
 local InputText = require("ui/widget/inputtext")
+local FocusManager = require("ui/widget/focusmanager")
+local Geom = require("ui/geometry")
 local _ = require("gettext")
 
 
@@ -55,7 +58,6 @@ local ZoteroBrowser = Menu:extend{
     no_title = true,
     is_borderless = true,
     is_popout = false,
-    height = Screen:getHeight() *0.8
 }
 
 
@@ -72,6 +74,115 @@ end
 function ZoteroBrowser:onMenuSelect(item)
     print("Menu selected")
     print("Should open ", item.path)
+end
+
+local SearchDialog = FocusManager:new{
+}
+
+function SearchDialog:init()
+    print("initializing search dialog")
+    self.search_query_input = InputText:new{
+            hint = "Search (Wildcard: ?)",
+            parent = self,
+            edit_callback = function(modified)
+                if modified == false then
+                    return
+                end
+                print("Searching for", self.search_query_input.text)
+
+                self:searchQueryModified(self.search_query_input.text)
+            end,
+            width = Screen:getWidth() - Screen:scaleBySize(50),
+            height = Screen:getHeight() * 0.06
+    }
+    self.browser = ZoteroBrowser:new{
+        parent = self,
+        item_table = {
+            {text ="Hello World"}
+        },
+        width = Screen:getWidth()
+    }
+    self.quit_button = Button:new{
+        text = "X",
+        callback = function()
+            print("Closing page")
+            UIManager:close(self)
+        end
+    }
+    self.search_page = FocusManager:new{
+        layout = {
+            {self.search_query_input, self.quit_button},
+            {self.browser}
+        }
+    }
+
+    self.vgroup = VerticalGroup:new{
+        align = "left",
+        HorizontalGroup:new{
+            self.search_query_input,
+            self.quit_button
+        },
+        self.browser
+    }
+    self.layout = {{self.search_query_input, self.quit_button}, {self.browser}}
+
+    self.dialog_frame = FrameContainer:new {
+        padding = 0,
+        margin = 0,
+        self.vgroup
+    }
+
+    local frame = self.dialog_frame
+
+    self[1] = CenterContainer:new{
+        dimen = Geom:new{
+            w = Screen:getWidth(),
+            h = Screen:getHeight(),
+        },
+        ignore_if_over = "height",
+        frame
+    }
+end
+
+function SearchDialog:searchQueryModified(query)
+
+    local sqlQuery = "%" .. string.gsub(query, " ", "%%") .. "%"
+    local db_path = ("%s/zotero.sqlite"):format(self.zotero_dir_path)
+    print("Searching for " .. "'" .. sqlQuery .. "'" .. " in " .. db_path)
+
+    self.conn = SQ3.open(db_path, "ro")
+
+    local stmt = self.conn:prepare(SEARCH_QUERY)
+    local resultset, nrecord = stmt:reset():bind(sqlQuery):resultset("hik", MAX_RESULTS)
+    self.conn:close()
+    
+
+    results = {}
+    if nrecord ~= 0 then
+        for i=1,#resultset[1] do
+            table.insert(results,
+            {
+                text = resultset[1][i],
+                path = resultset[2][i]
+            })
+        end
+    end
+    self.browser:setItems(results)
+
+    UIManager:setDirty(self.browser)
+
+    print("Search results: ", #self.browser.item_table)
+end
+
+function SearchDialog:onShow()
+    UIManager:setDirty(self, function()
+        return "ui", self.dialog_frame.dimen
+    end)
+end
+
+
+function SearchDialog:onShowKeyboard(ignore_first_hold_release)
+    self.search_query_input:onShowKeyboard(ignore_first_hold_release)
 end
 
 
@@ -96,69 +207,13 @@ function Plugin:init()
     self.settings = LuaSettings:open(("%s/%s"):format(DataStorage:getSettingsDir(), "zotero_settings.lua"))
     self.zotero_dir_path = self.settings:readSetting("zotero_dir")
     self.small_font_face = Font:getFace("smallffont")
-    self:initUI()
+    print("Starting dialog init")
+    self.search_dialog = SearchDialog:new{
+        zotero_dir_path = self.zotero_dir_path
+    }
+    print("Finished init")
 end
 
-function Plugin:initUI()
-    self.search_query_input = InputText:new{
-            hint = "Search (Wildcard: ?)",
-            parent = self.search_page,
-            edit_callback = function(modified)
-                if modified == false then
-                    return
-                end
-
-                self:searchQueryModified(self.search_query_input.text)
-            end,
-            width = Screen:getWidth() - Screen:scaleBySize(50)
-    }
-    self.browser = ZoteroBrowser:new{
-        parent = w,
-        item_table = {
-            {text ="Hello World"}
-        },
-    }
-    self.quit_button = Button:new{
-        text = "X",
-        callback = function()
-            print("Closing page")
-            UIManager:close(self.search_page)
-        end
-    }
-    self.search_page = VerticalGroup:new{
-        HorizontalGroup:new{
-            self.search_query_input,
-            self.quit_button
-        },
-        self.browser
-    }
-end
-
-function Plugin:searchQueryModified(query)
-    local sqlQuery = "%" .. string.gsub(query, " ", "%%") .. "%"
-    print("Searching for ", "'" .. sqlQuery .. "'")
-    local conn = SQ3.open(("%s/zotero.sqlite"):format(self.zotero_dir_path))
-    local stmt = conn:prepare(SEARCH_QUERY)
-    local resultset, nrecord = stmt:reset():bind(sqlQuery):resultset("hik", MAX_RESULTS)
-    conn:close()
-    
-
-    results = {}
-    if nrecord ~= 0 then
-        for i=1,#resultset[1] do
-            table.insert(results,
-            {
-                text = resultset[1][i],
-                path = resultset[2][i]
-            })
-        end
-    end
-    self.browser:setItems(results)
-
-    UIManager:setDirty(self.browser)
-
-    print("Search results: ", #self.browser.item_table)
-end
 
 function Plugin:addToMainMenu(menu_items)
     menu_items.zotero = {
@@ -168,11 +223,11 @@ function Plugin:addToMainMenu(menu_items)
             {
                 text = _("Search Database"),
                 callback = function()
-                    local w
-                    self:initUI()
-                    UIManager:show(self.search_page)
-                    self.search_query_input:onShowKeyboard()
-                    self:searchQueryModified("")
+                    print(self.zotero_dir_path)
+                    print("SHowing search dialog", self, self.search_dialog)
+                    UIManager:show(self.search_dialog)
+                    --self.search_dialog.search_query_input:onShowKeyboard()
+                    self.search_dialog:searchQueryModified("")
                     print("Dialog should be opened")
                 end,
             },
@@ -198,6 +253,7 @@ function Plugin:setZoteroDirectory()
     require("ui/downloadmgr"):new{
         onConfirm = function(path)
             self.zotero_dir_path = path
+            self.search_dialog.zotero_dir_path = path
             self.settings:saveSetting("zotero_dir", self.zotero_dir_path)
             self.settings:flush()
         end,
