@@ -36,7 +36,8 @@ creators.firstName || " " || creators.lastName AS author,
 	itemData.fieldID = (SELECT fieldID FROM fields WHERE fieldName = 'title')
 ) AS title,
 (
-	SELECT items.key || "/" || substr(path, 9) FROM itemAttachments
+	SELECT attachItem.key || "/" || substr(path, 9) FROM itemAttachments
+	LEFT JOIN items AS attachItem ON attachItem.itemID = itemAttachments.itemID
 	WHERE itemAttachments.parentItemID = items.itemID AND
 		contentType = 'application/pdf' AND
 		path LIKE 'storage:%'
@@ -72,8 +73,10 @@ function ZoteroBrowser:setItems(items)
 end
 
 function ZoteroBrowser:onMenuSelect(item)
-    print("Menu selected")
-    print("Should open ", item.path)
+    local full_path = self.zotero_dir_path .. "/storage/" .. item.path
+    print("Should open ", full_path)
+    local ReaderUI = require("apps/reader/readerui")
+    ReaderUI:showReader(full_path)
 end
 
 local SearchDialog = FocusManager:new{
@@ -100,14 +103,16 @@ function SearchDialog:init()
         item_table = {
             {text ="Hello World"}
         },
-        width = Screen:getWidth()
+        width = Screen:getWidth(),
+        zotero_dir_path = self.zotero_dir_path
     }
     self.quit_button = Button:new{
         text = "X",
         callback = function()
             print("Closing page")
             UIManager:close(self)
-        end
+        end,
+        height = Screen:getHeight() * 0.06
     }
     self.search_page = FocusManager:new{
         layout = {
@@ -225,8 +230,8 @@ function Plugin:addToMainMenu(menu_items)
                 callback = function()
                     print(self.zotero_dir_path)
                     print("SHowing search dialog", self, self.search_dialog)
+                    self.search_dialog:init()
                     UIManager:show(self.search_dialog)
-                    --self.search_dialog.search_query_input:onShowKeyboard()
                     self.search_dialog:searchQueryModified("")
                     print("Dialog should be opened")
                 end,
