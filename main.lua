@@ -1,3 +1,4 @@
+local Blitbuffer = require("ffi/blitbuffer")
 local Dispatcher = require("dispatcher")  -- luacheck:ignore
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
@@ -20,6 +21,7 @@ local Menu = require("ui/widget/menu")
 local InputText = require("ui/widget/inputtext")
 local FocusManager = require("ui/widget/focusmanager")
 local Geom = require("ui/geometry")
+local Size = require("ui/size")
 local _ = require("gettext")
 
 
@@ -54,7 +56,7 @@ WHERE path IS NOT NULL AND name LIKE ?;
 
 
 local ZoteroBrowser = Menu:extend{
-    width = Screen:getWidth() * 0.7,
+    --width = Screen:getWidth() * 0.7,
     --height = Screen:getHeight(),
     no_title = true,
     is_borderless = true,
@@ -75,6 +77,7 @@ end
 function ZoteroBrowser:onMenuSelect(item)
     local full_path = self.zotero_dir_path .. "/storage/" .. item.path
     print("Should open ", full_path)
+    --UIManager:close(self)
     local ReaderUI = require("apps/reader/readerui")
     ReaderUI:showReader(full_path)
 end
@@ -84,6 +87,10 @@ local SearchDialog = FocusManager:new{
 
 function SearchDialog:init()
     print("initializing search dialog")
+    local padding, margin, border_size
+    border_size = Size.border.window
+    padding = Size.padding.default
+    margin = Size.margin.default
     self.search_query_input = InputText:new{
             hint = "Search (Wildcard: ?)",
             parent = self,
@@ -95,15 +102,17 @@ function SearchDialog:init()
 
                 self:searchQueryModified(self.search_query_input.text)
             end,
-            width = Screen:getWidth() - Screen:scaleBySize(50),
-            height = Screen:getHeight() * 0.06
+            width = Screen:getWidth() - Screen:scaleBySize(50) - border_size * 2 - 3 * padding - 2 * margin,
+            --height = Screen:getHeight() * 0.06
     }
+    print("New height is ", self.search_query_input.height)
     self.browser = ZoteroBrowser:new{
         parent = self,
         item_table = {
             {text ="Hello World"}
         },
-        width = Screen:getWidth(),
+        width = Screen:getWidth() + padding * 2,
+        height = Screen:getHeight() - self.search_query_input.height - 2 * border_size - padding * 5,
         zotero_dir_path = self.zotero_dir_path
     }
     self.quit_button = Button:new{
@@ -112,8 +121,10 @@ function SearchDialog:init()
             print("Closing page")
             UIManager:close(self)
         end,
-        height = Screen:getHeight() * 0.06
+        height = self.search_query_input.height + 2 * padding,
+        width = Screen:scaleBySize(50)
     }
+    print("Padding: ", padding)
     self.search_page = FocusManager:new{
         layout = {
             {self.search_query_input, self.quit_button},
@@ -124,6 +135,7 @@ function SearchDialog:init()
     self.vgroup = VerticalGroup:new{
         align = "left",
         HorizontalGroup:new{
+            align = "center",
             self.search_query_input,
             self.quit_button
         },
@@ -134,6 +146,7 @@ function SearchDialog:init()
     self.dialog_frame = FrameContainer:new {
         padding = 0,
         margin = 0,
+        background = Blitbuffer.COLOR_WHITE,
         self.vgroup
     }
 
@@ -231,7 +244,10 @@ function Plugin:addToMainMenu(menu_items)
                     print(self.zotero_dir_path)
                     print("SHowing search dialog", self, self.search_dialog)
                     self.search_dialog:init()
-                    UIManager:show(self.search_dialog)
+                    UIManager:show(self.search_dialog, "full", Geom:new{
+                        w = Screen:getWidth(),
+                        h = Screen:getHeight()
+                    })
                     self.search_dialog:searchQueryModified("")
                     print("Dialog should be opened")
                 end,
