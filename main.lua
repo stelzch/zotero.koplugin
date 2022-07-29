@@ -9,6 +9,7 @@ local LuaSettings = require("frontend/luasettings")
 local DataStorage = require("datastorage")
 local SQ3 = require("lua-ljsqlite3/init")
 local Button = require("ui/widget/button")
+local IconButton = require("ui/widget/iconbutton")
 local ListView = require("ui/widget/listview")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local FrameContainer = require("ui/widget/container/framecontainer")
@@ -94,6 +95,7 @@ function SearchDialog:init()
     self.search_query_input = InputText:new{
             hint = "Search (Wildcard: ?)",
             parent = self,
+            margin = 2 * margin,
             edit_callback = function(modified)
                 if modified == false then
                     return
@@ -102,7 +104,7 @@ function SearchDialog:init()
 
                 self:searchQueryModified(self.search_query_input.text)
             end,
-            width = Screen:getWidth() - Screen:scaleBySize(50) - border_size * 2 - 3 * padding - 2 * margin,
+            width = Screen:getWidth() - Screen:scaleBySize(50) - border_size * 2 - 3 * padding - 4 * margin,
             --height = Screen:getHeight() * 0.06
     }
     print("New height is ", self.search_query_input.height)
@@ -112,11 +114,11 @@ function SearchDialog:init()
             {text ="Hello World"}
         },
         width = Screen:getWidth() + padding * 2,
-        height = Screen:getHeight() - self.search_query_input.height - 2 * border_size - padding * 5,
+        height = Screen:getHeight() - self.search_query_input.height - 2 * border_size - padding * 5 - 2 * margin,
         zotero_dir_path = self.zotero_dir_path
     }
-    self.quit_button = Button:new{
-        text = "X",
+    self.quit_button = IconButton:new{
+        icon = 'close',
         callback = function()
             print("Closing page")
             UIManager:close(self)
