@@ -1,4 +1,5 @@
 local Blitbuffer = require("ffi/blitbuffer")
+local InfoBuffer = require("ui/widget/infomessage")
 local Dispatcher = require("dispatcher")  -- luacheck:ignore
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
@@ -164,6 +165,7 @@ function SearchDialog:init()
     }
 end
 
+
 function SearchDialog:searchQueryModified(query)
 
     local sqlQuery = "%" .. string.gsub(query, " ", "%%") .. "%"
@@ -235,22 +237,45 @@ function Plugin:init()
 end
 
 
+function Plugin:zoteroDatabaseExists()
+    local f = io.open((self.zotero_dir_path .. "/zotero.sqlite"), "r")
+    if f~= nil then
+        io.close()
+        return true
+    else
+        return false
+    end
+end
+
+function Plugin:alertDatabaseNotReadable()
+    local b = InfoMessage:new{
+        text = _("The Zotero database file is not readable. Please try setting the correct Zotero directory."),
+        timeout = 5,
+        icon = "notice-warning"
+    }
+    UIManager:show(b)
+end
+
 function Plugin:addToMainMenu(menu_items)
     menu_items.zotero = {
         text = _("Zotero"),
-        sorting_hint = "more_tools",
+        sorting_hint = "search",
         sub_item_table = {
             {
                 text = _("Search Database"),
                 callback = function()
                     print(self.zotero_dir_path)
                     print("SHowing search dialog", self, self.search_dialog)
-                    self.search_dialog:init()
-                    UIManager:show(self.search_dialog, "full", Geom:new{
-                        w = Screen:getWidth(),
-                        h = Screen:getHeight()
-                    })
-                    self.search_dialog:searchQueryModified("")
+                    if not self:zoteroDatabaseExists() then
+                        self:alertDatabaseNotReadable()
+                    else
+                        self.search_dialog:init()
+                        UIManager:show(self.search_dialog, "full", Geom:new{
+                            w = Screen:getWidth(),
+                            h = Screen:getHeight()
+                        })
+                        self.search_dialog:searchQueryModified("")
+                    end
                     print("Dialog should be opened")
                 end,
             },
