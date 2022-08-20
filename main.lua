@@ -6,6 +6,7 @@ local InputDialog = require("ui/widget/inputdialog")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local CenterContainer = require("ui/widget/container/centercontainer")
+local TopContainer = require("ui/widget/container/topcontainer")
 local LuaSettings = require("frontend/luasettings")
 local DataStorage = require("datastorage")
 local SQ3 = require("lua-ljsqlite3/init")
@@ -63,6 +64,11 @@ local ZoteroBrowser = Menu:extend{
     no_title = true,
     is_borderless = true,
     is_popout = false,
+    outer_title_bar = Button:new{
+        text = _("Whoop"),
+        callback = function()
+        end,
+    },
 }
 
 
@@ -84,7 +90,12 @@ function ZoteroBrowser:onMenuSelect(item)
     ReaderUI:showReader(full_path)
 end
 
-local SearchDialog = FocusManager:new{
+local SearchDialog = TopContainer:new{
+        dimen = Geom:new{
+            w = Screen:getWidth(),
+            h = Screen:getHeight(),
+        },
+        ignore_if_over = "height",
 }
 
 function SearchDialog:init()
@@ -109,6 +120,8 @@ function SearchDialog:init()
             --height = Screen:getHeight() * 0.06
     }
     print("New height is ", self.search_query_input.height)
+    --local keyboard_height = self.search_query_input:getKeyboardDimen()
+    --print("Keyboard height is: ", keyboard_height)
     self.browser = ZoteroBrowser:new{
         parent = self,
         item_table = {
@@ -125,7 +138,8 @@ function SearchDialog:init()
             UIManager:close(self)
         end,
         height = self.search_query_input.height + 2 * padding,
-        width = Screen:scaleBySize(50)
+        width = Screen:scaleBySize(50),
+        parent = self
     }
     print("Padding: ", padding)
     self.search_page = FocusManager:new{
@@ -153,16 +167,7 @@ function SearchDialog:init()
         self.vgroup
     }
 
-    local frame = self.dialog_frame
-
-    self[1] = CenterContainer:new{
-        dimen = Geom:new{
-            w = Screen:getWidth(),
-            h = Screen:getHeight(),
-        },
-        ignore_if_over = "height",
-        frame
-    }
+    self[1] = self.dialog_frame
 end
 
 
@@ -275,6 +280,7 @@ function Plugin:addToMainMenu(menu_items)
                             h = Screen:getHeight()
                         })
                         self.search_dialog:searchQueryModified("")
+                        self.search_dialog:onShowKeyboard()
                     end
                     print("Dialog should be opened")
                 end,
