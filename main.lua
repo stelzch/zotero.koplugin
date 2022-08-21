@@ -73,62 +73,76 @@ local ZoteroBrowser = Menu:extend{
     no_title = false,
     is_borderless = true,
     is_popout = false,
-    collectionID = nil
+    parent = nil,
+    title_bar_left_icon = "appbar.search",
+    covers_full_screen = true
+--    return_arrow_propagation = false
 }
 
 
 function ZoteroBrowser:init()
     Menu.init(self)
-    print("Menu initialized")
+    self.paths = {}
+    print("Menu initialized, have paths:", #self.paths)
 end
 
-function ZoteroBrowser:onClose()
-    Menu.onClose(self)
-    self.close_callback()
+function ZoteroBrowser:onLeftButtonTap()
 end
 
-function ZoteroBrowser:setItems(items)
-    self.item_table = items
-    Menu.switchItemTable(self, "Zotero", items)
-    UIManager:setDirty(self)
-    --self:init()
+
+function ZoteroBrowser:onReturn()
+    table.remove(self.paths, #self.paths)
+    if #self.paths == 0 then
+        self:displayCollection(nil)
+    else
+        self:displayCollection(self.paths[#self.paths])
+    end
+    return true
 end
+
 
 function ZoteroBrowser:onMenuSelect(item)
-    --local full_path = self.zotero_dir_path .. "/storage/" .. item.path
-    --print("Should open ", full_path)
-    ----UIManager:close(self)
-    --local ReaderUI = require("apps/reader/readerui")
-    --ReaderUI:showReader(full_path)
     print("Clicked on item ", item)
-    print("ID: ", item.collectionID)
-    print("Path: ", item.path)
+    print("   ID: ", item.collectionID)
+    print("   Path: ", item.path)
     if item.collectionID ~= nil then
+        table.insert(self.paths, item.collectionID)
         self:displayCollection(item.collectionID)
+        print("now path length is ", #self.paths)
+    elseif item.path ~= nil then
+        local full_path = self.zotero_dir_path .. "/storage/" .. item.path
+        local ReaderUI = require("apps/reader/readerui")
+        self.close_callback()
+        ReaderUI:showReader(full_path)
     end
 end
 
 function ZoteroBrowser:displayCollection(collection_id)
-    local parentCollectionID = self.collectionID
-    self.collectionID = collection_id
-
+    print("collection ", collection_id)
+    print("NPaths: ", #self.paths, self.onReturn)
     local db_path = ("%s/zotero.sqlite"):format(self.zotero_dir_path)
 
     self.conn = SQ3.open(db_path, "ro")
 
     -- add collections (folders)
-    local collectionStmt = self.conn:prepare(SUB_COLLECTION_QUERY):reset():bind(collectionID)
+    local collectionStmt = self.conn:prepare(SUB_COLLECTION_QUERY):reset():bind(collection_id)
     local collectionResults, nrecord = collectionStmt:resultset("hik", MAX_RESULTS)
-    local itemStmt = self.conn:prepare(ITEM_QUERY):reset():bind(collectionID)
+    local itemStmt = self.conn:prepare(ITEM_QUERY):reset():bind(collection_id)
     local itemResults, nrecord2 = itemStmt:resultset("hik", MAX_RESULTS)
+    print("Nrecord: ", nrecord, nrecord2)
+    collectionResults = collectionResults or {{},{}}
     itemResults = itemResults or {{}, {}}
-    print("Number of papers: ", #itemResults, itemStmt, itemResults, nrecord2)
     self.conn:close()
-    
-    local results = {{
-        text = "../",
-        collectionID = parentCollectionID
-    }}
+
+    local results = {}
+
+    if nrecord + nrecord2 == 0 then
+        table.insert(results,
+        {
+            text = "<EMPTY>"
+        })
+    end
+
     if nrecord ~= 0 then
         for i=1,#collectionResults[1] do
             table.insert(results,
@@ -140,7 +154,7 @@ function ZoteroBrowser:displayCollection(collection_id)
     end
 
     -- add items (papers)
-    if nrecord ~= 0 then
+    if nrecord2 ~= 0 then
         for i=1,#itemResults[1] do
             table.insert(results,
             {
@@ -151,7 +165,11 @@ function ZoteroBrowser:displayCollection(collection_id)
     end
 
     self:setItems(results)
-    print("Displaying " .. #results .. " zotero entries")
+    print("Displayed items: ", nrecord + nrecord2)
+end
+
+function ZoteroBrowser:setItems(items)
+    self:switchItemTable("Zotero", items)
 end
 
 local Plugin = WidgetContainer:new{
@@ -177,22 +195,29 @@ function Plugin:init()
     print("Starting dialog init")
     self.browser = ZoteroBrowser:new{
         zotero_dir_path = self.zotero_dir_path,
+        refresh_callback = function()
+            UIManager:setDirty(self.zotero_dialog)
+            self.ui:onRefresh()
+        end,
         close_callback = function()
             UIManager:close(self.zotero_dialog)
         end
     }
-    print("Browser init complete")
     self.zotero_dialog = FrameContainer:new{
         padding = 0,
         bordersize = 0,
         background = Blitbuffer.COLOR_WHITE,
         self.browser
     }
-    print("Finished init")
+    self.browser.show_parent = self.zotero_dialog
 end
 
 
 function Plugin:zoteroDatabaseExists()
+    if self.zotero_dir_path == nil or self.zotero_dir_path == "" then
+        return false
+    end
+
     local f = io.open((self.zotero_dir_path .. "/zotero.sqlite"), "r")
     if f~= nil then
         io.close()
@@ -217,21 +242,19 @@ function Plugin:addToMainMenu(menu_items)
         sorting_hint = "search",
         sub_item_table = {
             {
-                text = _("Search Database"),
+                text = _("Browse Database"),
                 callback = function()
-                    print(self.zotero_dir_path)
-                    print("SHowing search dialog", self, self.zotero_dialog)
                     if not self:zoteroDatabaseExists() then
                         self:alertDatabaseNotReadable()
                     else
                         self.zotero_dialog:init()
+                        self.browser:init()
                         UIManager:show(self.zotero_dialog, "full", Geom:new{
                             w = Screen:getWidth(),
                             h = Screen:getHeight()
                         })
                         self.browser:displayCollection(nil)
                     end
-                    print("Dialog should be opened")
                 end,
             },
             {
