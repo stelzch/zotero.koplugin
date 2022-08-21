@@ -83,7 +83,6 @@ local ZoteroBrowser = Menu:extend{
 function ZoteroBrowser:init()
     Menu.init(self)
     self.paths = {}
-    print("Menu initialized, have paths:", #self.paths)
 end
 
 function ZoteroBrowser:onLeftButtonTap()
@@ -102,13 +101,9 @@ end
 
 
 function ZoteroBrowser:onMenuSelect(item)
-    print("Clicked on item ", item)
-    print("   ID: ", item.collectionID)
-    print("   Path: ", item.path)
     if item.collectionID ~= nil then
         table.insert(self.paths, item.collectionID)
         self:displayCollection(item.collectionID)
-        print("now path length is ", #self.paths)
     elseif item.path ~= nil then
         local full_path = self.zotero_dir_path .. "/storage/" .. item.path
         local ReaderUI = require("apps/reader/readerui")
@@ -118,8 +113,6 @@ function ZoteroBrowser:onMenuSelect(item)
 end
 
 function ZoteroBrowser:displayCollection(collection_id)
-    print("collection ", collection_id)
-    print("NPaths: ", #self.paths, self.onReturn)
     local db_path = ("%s/zotero.sqlite"):format(self.zotero_dir_path)
 
     self.conn = SQ3.open(db_path, "ro")
@@ -129,7 +122,6 @@ function ZoteroBrowser:displayCollection(collection_id)
     local collectionResults, nrecord = collectionStmt:resultset("hik", MAX_RESULTS)
     local itemStmt = self.conn:prepare(ITEM_QUERY):reset():bind(collection_id)
     local itemResults, nrecord2 = itemStmt:resultset("hik", MAX_RESULTS)
-    print("Nrecord: ", nrecord, nrecord2)
     collectionResults = collectionResults or {{},{}}
     itemResults = itemResults or {{}, {}}
     self.conn:close()
@@ -165,7 +157,6 @@ function ZoteroBrowser:displayCollection(collection_id)
     end
 
     self:setItems(results)
-    print("Displayed items: ", nrecord + nrecord2)
 end
 
 function ZoteroBrowser:setItems(items)
@@ -192,7 +183,6 @@ function Plugin:init()
     self.settings = LuaSettings:open(("%s/%s"):format(DataStorage:getSettingsDir(), "zotero_settings.lua"))
     self.zotero_dir_path = self.settings:readSetting("zotero_dir")
     self.small_font_face = Font:getFace("smallffont")
-    print("Starting dialog init")
     self.browser = ZoteroBrowser:new{
         zotero_dir_path = self.zotero_dir_path,
         refresh_callback = function()
