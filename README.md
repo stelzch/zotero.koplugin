@@ -17,6 +17,11 @@ This addon for [KOReader](https://github.com/koreader/koreader) allows you to vi
 
 ## Screencast
 
-<video loop autoplay src="https://github.com/stelzch/screencasts/blob/main/screencast.m4v?raw=true">
+
+https://user-images.githubusercontent.com/8364768/185810799-63bd154f-e465-4c55-86d0-4305132d4ef3.mp4
+
+
+
+<video loop autoplay src="https://user-images.githubusercontent.com/8364768/185810799-63bd154f-e465-4c55-86d0-4305132d4ef3.mp4">
     <img src="contrib/screenshot.png" />
 </video>
