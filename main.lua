@@ -1,29 +1,18 @@
 local Blitbuffer = require("ffi/blitbuffer")
-local InfoBuffer = require("ui/widget/infomessage")
 local Dispatcher = require("dispatcher")  -- luacheck:ignore
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local CenterContainer = require("ui/widget/container/centercontainer")
 local LuaSettings = require("frontend/luasettings")
 local DataStorage = require("datastorage")
 local SQ3 = require("lua-ljsqlite3/init")
-local Button = require("ui/widget/button")
-local IconButton = require("ui/widget/iconbutton")
-local ListView = require("ui/widget/listview")
-local TextBoxWidget = require("ui/widget/textboxwidget")
 local FrameContainer = require("ui/widget/container/framecontainer")
-local VerticalGroup = require("ui/widget/verticalgroup")
-local HorizontalGroup = require("ui/widget/horizontalgroup")
 local Device = require("device")
 local Screen = Device.screen
 local Font = require("ui/font")
 local Menu = require("ui/widget/menu")
-local InputText = require("ui/widget/inputtext")
-local FocusManager = require("ui/widget/focusmanager")
 local Geom = require("ui/geometry")
-local Size = require("ui/size")
 local _ = require("gettext")
 
 
@@ -33,14 +22,14 @@ local MAX_RESULTS = 200
 
 -- first parameter: collection id (NULL for root collection)
 local SUB_COLLECTION_QUERY = [[
-SELECT collectionID, collectionName FROM collections 
+SELECT collectionID, collectionName FROM collections
 WHERE parentCollectionID IS ?;
 ]]
 
 -- first parameter: collection id (NULL for root collection)
 local ITEM_QUERY = [[
 SELECT author || " - " || title AS name, path FROM (
-SELECT 
+SELECT
 creators.firstName || " " || creators.lastName AS author,
 (
 	SELECT value FROM itemData
@@ -69,7 +58,7 @@ WHERE path IS NOT NULL;
 -- first parameter: search query for first author and title
 local SEARCH_QUERY = [[
 SELECT author || " - " || title || COALESCE(" - " || doi, "") AS name, path FROM (
-SELECT 
+SELECT
 creators.firstName || " " || creators.lastName AS author,
 (
 	SELECT value FROM itemData
