@@ -28,7 +28,17 @@ local _ = require("gettext")
 
 
 local MAX_RESULTS = 20
-local SEARCH_QUERY = [[
+
+
+
+-- first parameter: collection id (NULL for root collection)
+local SUB_COLLECTION_QUERY = [[
+SELECT collectionID, collectionName FROM collections 
+WHERE parentCollectionID IS ?;
+]]
+
+-- first parameter: collection id (NULL for root collection)
+local ITEM_QUERY = [[
 SELECT author || " - " || title AS name, path FROM (
 SELECT 
 creators.firstName || " " || creators.lastName AS author,
@@ -51,18 +61,19 @@ creators.firstName || " " || creators.lastName AS author,
 	LEFT JOIN items ON items.itemID = collectionItems.itemID
 	LEFT JOIN itemCreators ON items.itemID = itemCreators.itemID
 	LEFT JOIN creators ON itemCreators.creatorID = creators.creatorID
-	WHERE  itemCreators.orderIndex = 0
+	WHERE itemCreators.orderIndex = 0 AND collectionItems.collectionID IS ?
 )
-WHERE path IS NOT NULL AND name LIKE ?;
+WHERE path IS NOT NULL;
 ]]
 
 
 local ZoteroBrowser = Menu:extend{
-    --width = Screen:getWidth() * 0.7,
-    --height = Screen:getHeight(),
-    no_title = true,
+    width = Screen:getWidth(),
+    height = Screen:getHeight(),
+    no_title = false,
     is_borderless = true,
     is_popout = false,
+    collectionID = nil
 }
 
 
@@ -71,148 +82,82 @@ function ZoteroBrowser:init()
     print("Menu initialized")
 end
 
+function ZoteroBrowser:onClose()
+    Menu.onClose(self)
+    self.close_callback()
+end
+
 function ZoteroBrowser:setItems(items)
     self.item_table = items
-    self:init()
+    Menu.switchItemTable(self, "Zotero", items)
+    UIManager:setDirty(self)
+    --self:init()
 end
 
 function ZoteroBrowser:onMenuSelect(item)
-    local full_path = self.zotero_dir_path .. "/storage/" .. item.path
-    print("Should open ", full_path)
-    --UIManager:close(self)
-    local ReaderUI = require("apps/reader/readerui")
-    ReaderUI:showReader(full_path)
+    --local full_path = self.zotero_dir_path .. "/storage/" .. item.path
+    --print("Should open ", full_path)
+    ----UIManager:close(self)
+    --local ReaderUI = require("apps/reader/readerui")
+    --ReaderUI:showReader(full_path)
+    print("Clicked on item ", item)
+    print("ID: ", item.collectionID)
+    print("Path: ", item.path)
+    if item.collectionID ~= nil then
+        self:displayCollection(item.collectionID)
+    end
 end
 
-local SearchDialog = FocusManager:new{
-}
+function ZoteroBrowser:displayCollection(collection_id)
+    local parentCollectionID = self.collectionID
+    self.collectionID = collection_id
 
-function SearchDialog:init()
-    print("initializing search dialog")
-    local padding, margin, border_size
-    border_size = Size.border.window
-    padding = Size.padding.default
-    margin = Size.margin.default
-    self.search_query_input = InputText:new{
-            hint = "Search (Wildcard: ?)",
-            parent = self,
-            margin = 2 * margin,
-            edit_callback = function(modified)
-                if modified == false then
-                    return
-                end
-                print("Searching for", self.search_query_input.text)
-
-                self:searchQueryModified(self.search_query_input.text)
-            end,
-            width = Screen:getWidth() - Screen:scaleBySize(50) - border_size * 2 - 3 * padding - 4 * margin,
-            --height = Screen:getHeight() * 0.06
-    }
-    print("New height is ", self.search_query_input.height)
-    self.browser = ZoteroBrowser:new{
-        parent = self,
-        item_table = {
-            {text ="Hello World"}
-        },
-        width = Screen:getWidth() + padding * 2,
-        height = Screen:getHeight() - self.search_query_input.height - 2 * border_size - padding * 5 - 2 * margin,
-        zotero_dir_path = self.zotero_dir_path
-    }
-    self.quit_button = IconButton:new{
-        icon = 'close',
-        callback = function()
-            print("Closing page")
-            UIManager:close(self)
-        end,
-        height = self.search_query_input.height + 2 * padding,
-        width = Screen:scaleBySize(50)
-    }
-    print("Padding: ", padding)
-    self.search_page = FocusManager:new{
-        layout = {
-            {self.search_query_input, self.quit_button},
-            {self.browser}
-        }
-    }
-
-    self.vgroup = VerticalGroup:new{
-        align = "left",
-        HorizontalGroup:new{
-            align = "center",
-            self.search_query_input,
-            self.quit_button
-        },
-        self.browser
-    }
-    self.layout = {{self.search_query_input, self.quit_button}, {self.browser}}
-
-    self.dialog_frame = FrameContainer:new {
-        padding = 0,
-        margin = 0,
-        background = Blitbuffer.COLOR_WHITE,
-        self.vgroup
-    }
-
-    local frame = self.dialog_frame
-
-    self[1] = CenterContainer:new{
-        dimen = Geom:new{
-            w = Screen:getWidth(),
-            h = Screen:getHeight(),
-        },
-        ignore_if_over = "height",
-        frame
-    }
-end
-
-
-function SearchDialog:searchQueryModified(query)
-
-    local sqlQuery = "%" .. string.gsub(query, " ", "%%") .. "%"
     local db_path = ("%s/zotero.sqlite"):format(self.zotero_dir_path)
-    print("Searching for " .. "'" .. sqlQuery .. "'" .. " in " .. db_path)
 
     self.conn = SQ3.open(db_path, "ro")
 
-    local stmt = self.conn:prepare(SEARCH_QUERY)
-    local resultset, nrecord = stmt:reset():bind(sqlQuery):resultset("hik", MAX_RESULTS)
+    -- add collections (folders)
+    local collectionStmt = self.conn:prepare(SUB_COLLECTION_QUERY):reset():bind(collectionID)
+    local collectionResults, nrecord = collectionStmt:resultset("hik", MAX_RESULTS)
+    local itemStmt = self.conn:prepare(ITEM_QUERY):reset():bind(collectionID)
+    local itemResults, nrecord2 = itemStmt:resultset("hik", MAX_RESULTS)
+    itemResults = itemResults or {{}, {}}
+    print("Number of papers: ", #itemResults, itemStmt, itemResults, nrecord2)
     self.conn:close()
     
-
-    results = {}
+    local results = {{
+        text = "../",
+        collectionID = parentCollectionID
+    }}
     if nrecord ~= 0 then
-        for i=1,#resultset[1] do
+        for i=1,#collectionResults[1] do
             table.insert(results,
             {
-                text = resultset[1][i],
-                path = resultset[2][i]
+                text = collectionResults[2][i] .. "/",
+                collectionID = collectionResults[1][i]
             })
         end
     end
-    self.browser:setItems(results)
 
-    UIManager:setDirty(self.browser)
+    -- add items (papers)
+    if nrecord ~= 0 then
+        for i=1,#itemResults[1] do
+            table.insert(results,
+            {
+                text = itemResults[1][i],
+                path = itemResults[2][i]
+            })
+        end
+    end
 
-    print("Search results: ", #self.browser.item_table)
+    self:setItems(results)
+    print("Displaying " .. #results .. " zotero entries")
 end
-
-function SearchDialog:onShow()
-    UIManager:setDirty(self, function()
-        return "ui", self.dialog_frame.dimen
-    end)
-end
-
-
-function SearchDialog:onShowKeyboard(ignore_first_hold_release)
-    self.search_query_input:onShowKeyboard(ignore_first_hold_release)
-end
-
 
 local Plugin = WidgetContainer:new{
     name = "zotero",
     is_doc_only = false
 }
-
 
 function Plugin:onDispatcherRegisterActions()
     Dispatcher:registerAction("zotero_open_action", {
@@ -230,8 +175,18 @@ function Plugin:init()
     self.zotero_dir_path = self.settings:readSetting("zotero_dir")
     self.small_font_face = Font:getFace("smallffont")
     print("Starting dialog init")
-    self.search_dialog = SearchDialog:new{
-        zotero_dir_path = self.zotero_dir_path
+    self.browser = ZoteroBrowser:new{
+        zotero_dir_path = self.zotero_dir_path,
+        close_callback = function()
+            UIManager:close(self.zotero_dialog)
+        end
+    }
+    print("Browser init complete")
+    self.zotero_dialog = FrameContainer:new{
+        padding = 0,
+        bordersize = 0,
+        background = Blitbuffer.COLOR_WHITE,
+        self.browser
     }
     print("Finished init")
 end
@@ -265,16 +220,16 @@ function Plugin:addToMainMenu(menu_items)
                 text = _("Search Database"),
                 callback = function()
                     print(self.zotero_dir_path)
-                    print("SHowing search dialog", self, self.search_dialog)
+                    print("SHowing search dialog", self, self.zotero_dialog)
                     if not self:zoteroDatabaseExists() then
                         self:alertDatabaseNotReadable()
                     else
-                        self.search_dialog:init()
-                        UIManager:show(self.search_dialog, "full", Geom:new{
+                        self.zotero_dialog:init()
+                        UIManager:show(self.zotero_dialog, "full", Geom:new{
                             w = Screen:getWidth(),
                             h = Screen:getHeight()
                         })
-                        self.search_dialog:searchQueryModified("")
+                        self.browser:displayCollection(nil)
                     end
                     print("Dialog should be opened")
                 end,
@@ -301,7 +256,7 @@ function Plugin:setZoteroDirectory()
     require("ui/downloadmgr"):new{
         onConfirm = function(path)
             self.zotero_dir_path = path
-            self.search_dialog.zotero_dir_path = path
+            self.zotero_dialog.zotero_dir_path = path
             self.settings:saveSetting("zotero_dir", self.zotero_dir_path)
             self.settings:flush()
         end,
