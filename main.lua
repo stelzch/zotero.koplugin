@@ -66,6 +66,43 @@ creators.firstName || " " || creators.lastName AS author,
 WHERE path IS NOT NULL;
 ]]
 
+-- first parameter: search query for first author and title
+local SEARCH_QUERY = [[
+SELECT author || " - " || title || COALESCE(" - " || doi, "") AS name, path FROM (
+SELECT 
+creators.firstName || " " || creators.lastName AS author,
+(
+	SELECT value FROM itemData
+	LEFT JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
+	WHERE
+	itemData.itemID = items.itemID AND
+	itemData.fieldID = (SELECT fieldID FROM fields WHERE fieldName = 'title')
+) AS title,
+(
+	SELECT attachItem.key || "/" || substr(path, 9) FROM itemAttachments
+	LEFT JOIN items AS attachItem ON attachItem.itemID = itemAttachments.itemID
+	WHERE itemAttachments.parentItemID = items.itemID AND
+		contentType = 'application/pdf' AND
+		path LIKE 'storage:%'
+	LIMIT 1
+) AS path,
+(
+    SELECT value FROM itemData
+    LEFT JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
+    WHERE
+        itemData.itemID = items.itemID AND
+        itemData.fieldID = (SELECT fieldID FROM fields WHERE fieldName = 'DOI')
+    LIMIT 1
+) AS doi
+ FROM collectionItems
+	LEFT JOIN items ON items.itemID = collectionItems.itemID
+	LEFT JOIN itemCreators ON items.itemID = itemCreators.itemID
+	LEFT JOIN creators ON itemCreators.creatorID = creators.creatorID
+	WHERE itemCreators.orderIndex = 0
+)
+WHERE path IS NOT NULL AND name LIKE ?;
+]]
+
 
 local ZoteroBrowser = Menu:extend{
     width = Screen:getWidth(),
@@ -85,7 +122,38 @@ function ZoteroBrowser:init()
     self.paths = {}
 end
 
+-- Show search input
 function ZoteroBrowser:onLeftButtonTap()
+    local search_query_dialog
+    search_query_dialog = InputDialog:new{
+        title = _("Search Zotero titles"),
+        input = "",
+        input_hint = "search query",
+        description = _("This will search title, first author and DOI of all entries."),
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    id = "close",
+                    callback = function()
+                        UIManager:close(search_query_dialog)
+                    end,
+                },
+                {
+                    text = _("Search"),
+                    is_enter_default = true,
+                    callback = function()
+                        UIManager:close(search_query_dialog)
+                        self:displaySearchResults(search_query_dialog:getInputText())
+                    end,
+                },
+            }
+        }
+    }
+    UIManager:show(search_query_dialog)
+    search_query_dialog:onShowKeyboard()
+
+
 end
 
 
@@ -112,9 +180,46 @@ function ZoteroBrowser:onMenuSelect(item)
     end
 end
 
+function ZoteroBrowser:displaySearchResults(query)
+    local cur_path = self.paths[#self.paths]
+    if cur_path ~= nil and type(cur_path) == "string" then
+        -- Replace the currently displayed search query
+        self.paths[#self.paths] = query
+    else
+        -- Insert search query as path
+        table.insert(self.paths, query)
+    end
+
+
+    query = "%" .. string.gsub(query, " ", "%%") .. "%"
+    local db_path = ("%s/zotero.sqlite"):format(self.zotero_dir_path)
+    self.conn = SQ3.open(db_path, "ro")
+    local searchStmt = self.conn:prepare(SEARCH_QUERY):reset():bind(query)
+    local searchResults, nrecords = searchStmt:resultset("hik", MAX_RESULTS)
+    self.conn:close()
+    searchResults = searchResults or {{}, {}}
+
+    local menu_items = {}
+    if nrecords == 0 then
+        table.insert(menu_items,
+        {
+            text = "No search results."
+        })
+    else
+        for i=1,#searchResults[1] do
+            table.insert(menu_items,
+            {
+                text = searchResults[1][i],
+                path = searchResults[2][i],
+            })
+        end
+    end
+
+    self:setItems(menu_items)
+end
+
 function ZoteroBrowser:displayCollection(collection_id)
     local db_path = ("%s/zotero.sqlite"):format(self.zotero_dir_path)
-
     self.conn = SQ3.open(db_path, "ro")
 
     -- add collections (folders)
