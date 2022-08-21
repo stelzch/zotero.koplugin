@@ -27,7 +27,7 @@ local Size = require("ui/size")
 local _ = require("gettext")
 
 
-local MAX_RESULTS = 20
+local MAX_RESULTS = 200
 
 
 
@@ -377,6 +377,16 @@ function Plugin:setZoteroDirectory()
             self.zotero_dialog.zotero_dir_path = path
             self.settings:saveSetting("zotero_dir", self.zotero_dir_path)
             self.settings:flush()
+            if not self:zoteroDatabaseExists() then
+                self:alertDatabaseNotReadable()
+            else
+                local b = InfoMessage:new{
+                    text = _("Success! Your Zotero library should now be accessible."),
+                    timeout = 3,
+                    icon = "check"
+                }
+                UIManager:show(b)
+            end
         end,
     }:chooseDir()
 end
