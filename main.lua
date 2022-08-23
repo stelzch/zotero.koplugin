@@ -55,6 +55,34 @@ creators.firstName || " " || creators.lastName AS author,
 WHERE path IS NOT NULL;
 ]]
 
+local ROOT_ITEM_QUERY = [[
+SELECT author || " - " || title AS name, path FROM (
+SELECT
+creators.firstName || " " || creators.lastName AS author,
+(
+	SELECT value FROM itemData
+	LEFT JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
+	WHERE
+	itemData.itemID = items.itemID AND
+	itemData.fieldID = (SELECT fieldID FROM fields WHERE fieldName = 'title')
+) AS title,
+(
+	SELECT attachItem.key || "/" || substr(path, 9) FROM itemAttachments
+	LEFT JOIN items AS attachItem ON attachItem.itemID = itemAttachments.itemID
+	WHERE itemAttachments.parentItemID = items.itemID AND
+		contentType = 'application/pdf' AND
+		path LIKE 'storage:%'
+	LIMIT 1
+) AS path
+ FROM items
+	LEFT JOIN itemCreators ON items.itemID = itemCreators.itemID
+	LEFT JOIN creators ON itemCreators.creatorID = creators.creatorID
+	WHERE itemCreators.orderIndex = 0 
+        AND items.itemID NOT IN (SELECT DISTINCT itemID FROM collectionItems)
+)
+WHERE path IS NOT NULL;
+]]
+
 -- first parameter: search query for first author and title
 local SEARCH_QUERY = [[
 SELECT author || " - " || title || COALESCE(" - " || doi, "") AS name, path FROM (
@@ -83,8 +111,7 @@ creators.firstName || " " || creators.lastName AS author,
         itemData.fieldID = (SELECT fieldID FROM fields WHERE fieldName = 'DOI')
     LIMIT 1
 ) AS doi
- FROM collectionItems
-	LEFT JOIN items ON items.itemID = collectionItems.itemID
+ FROM items
 	LEFT JOIN itemCreators ON items.itemID = itemCreators.itemID
 	LEFT JOIN creators ON itemCreators.creatorID = creators.creatorID
 	WHERE itemCreators.orderIndex = 0
@@ -214,7 +241,12 @@ function ZoteroBrowser:displayCollection(collection_id)
     -- add collections (folders)
     local collectionStmt = self.conn:prepare(SUB_COLLECTION_QUERY):reset():bind(collection_id)
     local collectionResults, nrecord = collectionStmt:resultset("hik", MAX_RESULTS)
-    local itemStmt = self.conn:prepare(ITEM_QUERY):reset():bind(collection_id)
+    local itemStmt
+    if collection_id == nil then
+        itemStmt = self.conn:prepare(ROOT_ITEM_QUERY):reset()
+    else
+        itemStmt = self.conn:prepare(ITEM_QUERY):reset():bind(collection_id)
+    end
     local itemResults, nrecord2 = itemStmt:resultset("hik", MAX_RESULTS)
     collectionResults = collectionResults or {{},{}}
     itemResults = itemResults or {{}, {}}
@@ -364,6 +396,7 @@ function Plugin:setZoteroDirectory()
         onConfirm = function(path)
             self.zotero_dir_path = path
             self.zotero_dialog.zotero_dir_path = path
+            self.browser.zotero_dir_path = path
             self.settings:saveSetting("zotero_dir", self.zotero_dir_path)
             self.settings:flush()
             if not self:zoteroDatabaseExists() then
