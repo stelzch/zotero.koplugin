@@ -48,5 +48,17 @@ describe("Zotero API Client", function()
         local e = ZoteroAPI.syncItems()
         assert.is_nil(e)
     end)
+
+    it("can download files", function()
+        local e  = ZoteroAPI.downloadFile("9E9TBDVH")
+        assert.is_nil(e)
+
+    end)
+
+
+    --it("can read the correct version number", function()
+    --    local nr = ZoteroAPI.getLibraryVersion()
+    --    assert.is_equal(nr, "1147")
+    --end)
 end)
 
