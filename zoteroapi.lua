@@ -5,6 +5,7 @@ local ltn12 = require("ltn12")
 local https = require("ssl.https")
 local JSON = require("json")
 local lfs = require("libs/libkoreader-lfs")
+local DocSettings = require("docsettings")
 
 -- Functions expect config parameter, a lua table with the following keys:
 -- zotero_dir: Path to a directory where cache files will be stored
@@ -18,12 +19,22 @@ local lfs = require("libs/libkoreader-lfs")
 local API = {}
 
 function joinTables(target, source)
-    return table.move(source, 1, #source, #target + 1, targe)
+    return table.move(source, 1, #source, #target + 1, target)
 end
 
 function file_exists(path)
     if path == nil then return nil end
     return lfs.attributes(path) ~= nil
+end
+
+function table_contains(t, search_value)
+    for k, v in pairs(t) do
+        if v == search_value then
+            return true
+        end
+    end
+
+    return false
 end
 
 function file_slurp(path)
@@ -35,6 +46,36 @@ function file_slurp(path)
         f:close()
         return content
     end
+end
+
+function API.cutDecimalPlaces(x, num_places)
+    local fac = 10^num_places
+    return math.floor(x * fac) / fac
+end
+
+function API.bboxFromZotero(bbox)
+    return {
+        ["x"]= bbox[1],
+        ["y"]= bbox[2],
+        ["w"]= bbox[3] - bbox[1],
+        ["h"]= bbox[4] - bbox[2]
+    }
+end
+
+function API.bboxToZotero(bbox, places)
+    return {
+        [1] = API.cutDecimalPlaces(bbox.x, places),
+        [2] = API.cutDecimalPlaces(bbox.y, places),
+        [3] = API.cutDecimalPlaces(bbox.x + bbox.w, places),
+        [4] = API.cutDecimalPlaces(bbox.y + bbox.h, places)
+    }
+end
+
+function API.bboxEqual(a, b, tolerance)
+    return (math.abs(a.x - b.x) < tolerance 
+        and math.abs(a.y - b.y) < tolerance 
+        and math.abs(a.w - b.w) < tolerance 
+        and math.abs(a.h - b.h) < tolerance)
 end
 
 function API.init(zotero_dir)
@@ -49,8 +90,15 @@ function API.init(zotero_dir)
     end
 end
 
+function API.getAPIKey()
+    return API.settings:readSetting("api_key")
+end
 function API.setAPIKey(api_key)
     API.settings:saveSetting("api_key", api_key)
+end
+
+function API.getUserID()
+    return API.settings:readSetting("user_id")
 end
 
 function API.setUserID(user_id)
@@ -63,6 +111,14 @@ end
 
 function API.setLibraryVersion(version)
     return API.settings:saveSetting("library_version_nr", version)
+end
+
+function API.getFilterTag()
+    return API.settings:readSetting("filter_tag", "")
+end
+
+function API.setFilterTag(tag)
+    return API.settings:saveSetting("filter_tag", tag)
 end
 
 function API.setItems(items)
@@ -86,6 +142,29 @@ function API.getItems()
     end
 
     return API.items
+end
+
+function API.getCollections()
+    if API.collections == nil then
+        local path = BaseUtil.joinPath(API.zotero_dir, "collections.json")
+        local file_exists = lfs.attributes(path)
+
+        if not file_exists then
+            API.collections = {}
+        else
+            API.collections = JSON.decode(file_slurp(path))
+        end
+    end
+
+    return API.collections
+end
+
+function API.setCollections(collections)
+    API.collections = collections
+    local f = assert(io.open(BaseUtil.joinPath(API.zotero_dir, "collections.json"), "w"))
+    local content = JSON.encode(API.collections)
+    f:write(content)
+    f:close()
 end
 
 function API.verifyResponse(r, c)
@@ -195,7 +274,7 @@ function API.getHeaders(api_key)
     }
 end
 
-function API.syncItems()
+function API.syncAllItems()
     local since = API.getLibraryVersion()
 
     local e, api_key, user_id = API.ensureKeyAndID()
@@ -204,7 +283,9 @@ function API.syncItems()
 
     local headers = API.getHeaders(api_key)
     local items_url = ("https://api.zotero.org/users/%s/items?since=%s"):format(user_id, since)
+    local collections_url = ("https://api.zotero.org/users/%s/collections?since=%s"):format(user_id, since)
 
+    -- Sync library items
     local items = API.getItems()
     print("loaded items: " .. #items)
     local r, e = API.fetchCollectionPaginated(items_url, headers, function(partial_entries)
@@ -215,14 +296,34 @@ function API.syncItems()
             local key = item.key
             items[key] = item
         end
-        API.setItems(items)
     end)
     if e ~= nil then return e end
+    API.setItems(items)
+
+    -- Sync library collections
+    local collections = API.getCollections()
+    local r, e = API.fetchCollectionPaginated(collections_url, headers, function(partial_entries)
+        print("Received callback, processing entries: " .. #partial_entries)
+        for i = 1, #partial_entries do
+            -- Ruthlessly update our local items
+            local collection = partial_entries[i]
+            local key = collection.key
+            collections[key] = collection
+        end
+    end)
+    if e ~= nil then return e end
+    API.setCollections(collections)
 
     API.setLibraryVersion(r)
     API.settings:flush()
 
     return nil
+end
+
+-- If a tag is set, ensure all entries actually have that tag and it has not been removed
+-- If no tag is set, just remove all deleted entries from the library
+function API.purgeEntries()
+
 end
 
 --function API.fetchItemDetails(url, headers)
@@ -248,19 +349,21 @@ end
 --    return result, nil
 --end
 
--- Downloads an attachment file to the correct directory. Return null
-function API.downloadFile(key)
+-- Downloads an attachment file to the correct directory and returns the path.
+-- If the local version is up to date, no network request is made.
+-- Returns tuple with path and error, if path is correct then error is nil.
+function API.downloadAndGetPath(key)
     local e, api_key, user_id = API.ensureKeyAndID()
-    if e ~= nil then return e end
+    if e ~= nil then return nil, e end
 
     local items = API.getItems()
     if items[key] == nil then
-        return "Error: the requested file can not be found in the database"
+        return nil, "Error: the requested file can not be found in the database"
     end
     local item = items[key]
 
     if item.data.itemType ~= "attachment" then
-        return "Error: this item is not an attachment"
+        return nil, "Error: this item is not an attachment"
     end
 
     local attachment = item
@@ -269,12 +372,12 @@ function API.downloadFile(key)
     lfs.mkdir(targetDir)
 
     local local_version = tonumber(file_slurp(targetDir .. "/version"))
+    local targetPath = targetDir .. "/" .. attachment.data.title
 
     if local_version ~= nil and local_version >= attachment.version then
-        return nil -- all done, local file is up to date
+        return targetPath, nil -- all done, local file is up to date
     end
 
-    local targetPath = targetDir .. "/" .. attachment.data.title
     local url = attachment.links.enclosure.href
 
     print("Fetching " .. url)
@@ -286,13 +389,96 @@ function API.downloadFile(key)
     }
 
     local e = API.verifyResponse(r, c)
-    if e ~= nil then return e end
+    if e ~= nil then return nil, e end
 
     local versionFile = io.open(targetDir .. "/version", "w")
     versionFile:write(tostring(attachment.version))
     versionFile:close()
 
-    return nil
+    return targetPath, nil
+end
+
+-- Return a table of entries of a collection.
+--
+-- If key is nil, entries of the root collection will be given.
+-- Each entry is a table with at least two values, the key and name.
+-- Collections will have a display name that ends with a slash and contain true
+-- under the key "collection" in their table.
+function API.displayCollection(key)
+    local result = {}
+
+    -- Get list of collections
+    local collections = API.getCollections()
+    for k, collection in pairs(collections) do
+        if (key == nil and collection.data.parentCollection == false) or
+            (key ~= nil and collection.data.parentCollection == key) then
+            table.insert(result, {
+                ["key"] = k,
+                ["text"] = collection.data.name .. "/",
+                ["collection"] = true
+            })
+        end
+    end
+    -- Sort collections by name
+    local comparator = function(a,b)
+        return (a["text"] < b["text"])
+    end
+    table.sort(result, comparator)
+
+    -- Get list of items
+    -- Careful: linear search. Can be optimized quite a bit!
+    local items = API.getItems()
+    local collectionItems = {}
+
+    for k, item in pairs(items) do
+        if item.data.itemType == "attachment" and item.data.parentItem ~= nil then
+            local parentItem = items[item.data.parentItem]
+            if parentItem ~= nil and table_contains(parentItem.data.collections, key) then
+                local author = parentItem.meta.creatorSummary or "Unknown"
+                local name = author .. " - " .. parentItem.data.title
+
+                table.insert(collectionItems, {
+                    ["key"] = k,
+                    ["text"] = name
+                })
+            end
+        end
+    end
+    table.sort(collectionItems, comparator)
+
+    -- Join collections and items together and return it
+    return joinTables(result, collectionItems)
+end
+
+function API.displaySearchResults(query)
+    local queryRegex = ".*" .. string.gsub(query, " ", ".*") .. ".*"
+    print("Searching for " .. queryRegex)
+    -- Careful: linear search. Can be optimized quite a bit!
+    local items = API.getItems()
+    local results = {}
+
+    for k, item in pairs(items) do
+        if item.data.itemType == "attachment" and item.data.parentItem ~= nil then
+            local parentItem = items[item.data.parentItem]
+            if parentItem ~= nil then
+                local author = parentItem.meta.creatorSummary or "Unknown"
+                local name = author .. " - " .. parentItem.data.title
+
+                if parentItem.data.DOI ~= nil and parentItem.data.DOI ~= "" then
+                    name = name .. " - " .. parentItem.data.DOI
+                end
+
+                if string.match(name, queryRegex) then
+                    table.insert(results, {
+                        ["key"] = k,
+                        ["text"] = name
+                    })
+                end
+            end
+        end
+    end
+
+    return results
 end
 
 return API
