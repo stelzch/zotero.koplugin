@@ -18,6 +18,10 @@ local DocSettings = require("docsettings")
 
 local API = {}
 
+local SUPPORTED_MEDIA_TYPES = {
+    [1] = "application/pdf"
+}
+
 function joinTables(target, source)
     return table.move(source, 1, #source, #target + 1, target)
 end
@@ -351,8 +355,9 @@ end
 
 -- Downloads an attachment file to the correct directory and returns the path.
 -- If the local version is up to date, no network request is made.
+-- Before the download, the download_callback is called.
 -- Returns tuple with path and error, if path is correct then error is nil.
-function API.downloadAndGetPath(key)
+function API.downloadAndGetPath(key, download_callback)
     local e, api_key, user_id = API.ensureKeyAndID()
     if e ~= nil then return nil, e end
 
@@ -372,11 +377,13 @@ function API.downloadAndGetPath(key)
     lfs.mkdir(targetDir)
 
     local local_version = tonumber(file_slurp(targetDir .. "/version"))
-    local targetPath = targetDir .. "/" .. attachment.data.title
+    local targetPath = targetDir .. "/" .. attachment.data.filename
 
-    if local_version ~= nil and local_version >= attachment.version then
+    if local_version ~= nil and local_version >= attachment.version and file_exists(targetPath) then
         return targetPath, nil -- all done, local file is up to date
     end
+
+    if download_callback ~= nil then download_callback() end
 
     local url = attachment.links.enclosure.href
 
@@ -431,12 +438,15 @@ function API.displayCollection(key)
     local collectionItems = {}
 
     for k, item in pairs(items) do
-        if item.data.itemType == "attachment" and item.data.parentItem ~= nil then
+        if item.data.itemType == "attachment"
+            and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType )
+            and item.data.parentItem ~= nil then
             local parentItem = items[item.data.parentItem]
             if parentItem ~= nil and table_contains(parentItem.data.collections, key) then
                 local author = parentItem.meta.creatorSummary or "Unknown"
                 local name = author .. " - " .. parentItem.data.title
 
+                print("Content: " .. item.data.contentType .. "\n" .. JSON.encode(item))
                 table.insert(collectionItems, {
                     ["key"] = k,
                     ["text"] = name
@@ -458,7 +468,9 @@ function API.displaySearchResults(query)
     local results = {}
 
     for k, item in pairs(items) do
-        if item.data.itemType == "attachment" and item.data.parentItem ~= nil then
+        if item.data.itemType == "attachment" 
+            and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType )
+            and item.data.parentItem ~= nil then
             local parentItem = items[item.data.parentItem]
             if parentItem ~= nil then
                 local author = parentItem.meta.creatorSummary or "Unknown"

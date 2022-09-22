@@ -15,7 +15,6 @@ local Geom = require("ui/geometry")
 local _ = require("gettext")
 local ZoteroAPI = require("zoteroapi")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
-local T = require("ffi/util").template
 
 
 
@@ -86,19 +85,28 @@ function ZoteroBrowser:onMenuSelect(item)
         table.insert(self.paths, item.key)
         self:displayCollection(item.key)
     else
-        local full_path, e = ZoteroAPI.downloadAndGetPath(item.key)
-        if e ~= nil then
-            local b = InfoMessage:new{
-                text = _("Could not open file.") .. e,
-                timeout = 5,
-                icon = "notice-warning"
-            }
-            UIManager:show(b)
-        else
-            local ReaderUI = require("apps/reader/readerui")
-            self.close_callback()
-            ReaderUI:showReader(full_path)
-        end
+        self.download_dialog = InfoMessage:new{
+            text = _("Downloading file"),
+            timeout = 5,
+            icon = "notice-info",
+        }
+        UIManager:scheduleIn(0.05, function()
+            local full_path, e = ZoteroAPI.downloadAndGetPath(item.key)
+            if e ~= nil then
+                local b = InfoMessage:new{
+                    text = _("Could not open file.") .. e,
+                    timeout = 5,
+                    icon = "notice-warning"
+                }
+                UIManager:show(b)
+            else
+                UIManager:close(self.download_dialog)
+                local ReaderUI = require("apps/reader/readerui")
+                self.close_callback()
+                ReaderUI:showReader(full_path)
+            end
+        end)
+        UIManager:show(self.download_dialog)
     end
 end
 
@@ -173,27 +181,29 @@ function Plugin:addToMainMenu(menu_items)
             {
                 text = _("Synchronize"),
                 callback = function()
+                    UIManager:scheduleIn(1, function()
+                        local e = ZoteroAPI.syncAllItems()
+
+                        if e == nil then
+                            UIManager:show(InfoMessage:new{
+                                text = _("Success."),
+                                timeout = 3,
+                                icon = "check"
+                            })
+                        else
+                            UIManager:show(InfoMessage:new{
+                                text = e,
+                                timeout = 3,
+                                icon = "notice-warning"
+                            })
+                        end
+                    end)
+
                     UIManager:show(InfoMessage:new{
                         text = _("Synchronizing Zotero library. This might take some time."),
                         timeout = 3,
                         icon = "notice-info"
                     })
-
-                    local e = ZoteroAPI.syncAllItems()
-
-                    if e == nil then
-                        UIManager:show(InfoMessage:new{
-                            text = _("Success."),
-                            timeout = 3,
-                            icon = "check"
-                        })
-                    else
-                        UIManager:show(InfoMessage:new{
-                            text = e,
-                            timeout = 3,
-                            icon = "notice-warning"
-                        })
-                    end
                 end,
 
             },
