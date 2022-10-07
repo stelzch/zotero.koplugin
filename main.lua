@@ -26,8 +26,8 @@ local ZoteroBrowser = Menu:extend{
     is_popout = false,
     parent = nil,
     title_bar_left_icon = "appbar.search",
-    covers_full_screen = true
---    return_arrow_propagation = false
+    covers_full_screen = true,
+    return_arrow_propagation = false
 }
 
 
@@ -169,7 +169,6 @@ function Plugin:addToMainMenu(menu_items)
             {
                 text = _("Browse"),
                 callback = function()
-                    self.zotero_dialog:init()
                     self.browser:init()
                     UIManager:show(self.zotero_dialog, "full", Geom:new{
                         w = Screen:getWidth(),
@@ -273,7 +272,7 @@ function Plugin:setAccount()
                 {
                     text = _("Update"),
                     callback = function()
-                        local fields = MultiInputDialog:getFields()
+                        local fields = self.account_dialog:getFields()
                         if not string.match(fields[1], "[0-9]+") then
                             UIManager:show(InfoMessage:new{
                                 text = _("The User ID must be an integer number."),

@@ -22,16 +22,16 @@ local SUPPORTED_MEDIA_TYPES = {
     [1] = "application/pdf"
 }
 
-function joinTables(target, source)
+local function joinTables(target, source)
     return table.move(source, 1, #source, #target + 1, target)
 end
 
-function file_exists(path)
+local function file_exists(path)
     if path == nil then return nil end
     return lfs.attributes(path) ~= nil
 end
 
-function table_contains(t, search_value)
+local function table_contains(t, search_value)
     for k, v in pairs(t) do
         if v == search_value then
             return true
@@ -41,11 +41,11 @@ function table_contains(t, search_value)
     return false
 end
 
-function file_slurp(path)
+local function file_slurp(path)
     if not file_exists(path) then
         return nil
     else
-        f = io.open(path, "r")
+        local f = io.open(path, "r")
         local content = f:read("*all")
         f:close()
         return content
@@ -55,31 +55,6 @@ end
 function API.cutDecimalPlaces(x, num_places)
     local fac = 10^num_places
     return math.floor(x * fac) / fac
-end
-
-function API.bboxFromZotero(bbox)
-    return {
-        ["x"]= bbox[1],
-        ["y"]= bbox[2],
-        ["w"]= bbox[3] - bbox[1],
-        ["h"]= bbox[4] - bbox[2]
-    }
-end
-
-function API.bboxToZotero(bbox, places)
-    return {
-        [1] = API.cutDecimalPlaces(bbox.x, places),
-        [2] = API.cutDecimalPlaces(bbox.y, places),
-        [3] = API.cutDecimalPlaces(bbox.x + bbox.w, places),
-        [4] = API.cutDecimalPlaces(bbox.y + bbox.h, places)
-    }
-end
-
-function API.bboxEqual(a, b, tolerance)
-    return (math.abs(a.x - b.x) < tolerance 
-        and math.abs(a.y - b.y) < tolerance 
-        and math.abs(a.w - b.w) < tolerance 
-        and math.abs(a.h - b.h) < tolerance)
 end
 
 function API.init(zotero_dir)
@@ -115,6 +90,22 @@ end
 
 function API.setLibraryVersion(version)
     return API.settings:saveSetting("library_version_nr", version)
+end
+
+-- List of zotero items that need to be synced to the server.  Items that are
+-- modified will have a "key" property, new items will not carry this property.
+function API.getModifiedItems()
+    if API.modified_items == nil then
+        API.modified_items = API.settings:readSetting("modified_items", {})
+    end
+
+    return API.modified_items
+end
+
+
+-- This just syncs them to disk, it will not modify the Zotero collection!
+function API.saveModifiedItems()
+    API.settings:flush()
 end
 
 function API.getFilterTag()
@@ -330,28 +321,19 @@ function API.purgeEntries()
 
 end
 
---function API.fetchItemDetails(url, headers)
---    local e, api_key, user_id = API.ensureKeyAndID()
---    if e ~= nil then return nil, e end
---
---    local headers = joinTables(headers or {}, API.getHeaders(api_key))
---
---    local data = {}
---    r, c, h = http.request {
---        method = "GET",
---        url = url,
---        headers = headers,
---        sink = ltn12.sink.table(data)
---    }
---
---    local content = table.concat(data)
---    local ok, result = pcall(JSON.decode, content)
---    if not ok then
---        return nil, "Error: failed to parse JSON in response"
---    end
---
---    return result, nil
---end
+function API.getDirAndPath(attachmentKey)
+    local items = API.getItems()
+    local attachment = items[attachmentKey]
+
+    if attachment == nil then
+        return nil, nil
+    end
+
+    local targetDir = API.storage_dir .. "/" .. attachment.data.parentItem
+    local targetPath = targetDir .. "/" .. attachment.data.filename
+
+    return targetDir, targetPath
+end
 
 -- Downloads an attachment file to the correct directory and returns the path.
 -- If the local version is up to date, no network request is made.
@@ -373,11 +355,10 @@ function API.downloadAndGetPath(key, download_callback)
 
     local attachment = item
 
-    local targetDir = API.storage_dir .. "/" .. attachment.data.parentItem
+    local targetDir, targetPath = API.getDirAndPath(key)
     lfs.mkdir(targetDir)
 
     local local_version = tonumber(file_slurp(targetDir .. "/version"))
-    local targetPath = targetDir .. "/" .. attachment.data.filename
 
     if local_version ~= nil and local_version >= attachment.version and file_exists(targetPath) then
         return targetPath, nil -- all done, local file is up to date
@@ -385,10 +366,11 @@ function API.downloadAndGetPath(key, download_callback)
 
     if download_callback ~= nil then download_callback() end
 
-    local url = attachment.links.enclosure.href
+    print("Z: attachment ", JSON.encode(attachment))
+    local url = "https://api.zotero.org/users/" .. API.getUserID() .. "/items/" .. key .. "/file"
 
     print("Fetching " .. url)
-    r, c, h = http.request {
+    local r, c, h = http.request {
         url = url,
         headers = API.getHeaders(api_key),
         redirect = true,
@@ -468,7 +450,7 @@ function API.displaySearchResults(query)
     local results = {}
 
     for k, item in pairs(items) do
-        if item.data.itemType == "attachment" 
+        if item.data.itemType == "attachment"
             and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType )
             and item.data.parentItem ~= nil then
             local parentItem = items[item.data.parentItem]
@@ -491,6 +473,43 @@ function API.displaySearchResults(query)
     end
 
     return results
+end
+
+
+-- Output the timezone-agnostic timestamp, since KOReader uses timestamps with
+-- local time.
+function API.addTimezone(timestamp)
+    local year, month, day, hour, minute, second = string.match(timestamp,
+        "(%d%d%d%d)-(%d%d)-(%d%d) (%d%d):(%d%d):(%d%d)")
+    local time = {
+        ["year"] = year,
+        ["month"] = month,
+        ["day"] = day,
+        ["hour"] = hour,
+        ["min"] = minute,
+        ["sec"] = second
+    }
+
+    return os.date("!%Y-%m-%dT%H:%M:%SZ", os.time(time))
+end
+
+function API.localTimezone(timestamp)
+end
+
+function API.compareTimestamps(zoteroTimestamp, koreaderTimestamp)
+    local a,b = zoteroTimestamp, API.addTimezone(koreaderTimestamp)
+
+    if a == b then
+       return 0
+    elseif a < b then
+        return -1
+    else
+        return 1
+    end
+end
+
+function API.syncModifiedItems()
+    local modItems = API.getModifiedItems()
 end
 
 return API
