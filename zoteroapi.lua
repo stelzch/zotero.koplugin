@@ -22,16 +22,16 @@ local SUPPORTED_MEDIA_TYPES = {
     [1] = "application/pdf"
 }
 
-function joinTables(target, source)
+local function joinTables(target, source)
     return table.move(source, 1, #source, #target + 1, target)
 end
 
-function file_exists(path)
+local function file_exists(path)
     if path == nil then return nil end
     return lfs.attributes(path) ~= nil
 end
 
-function table_contains(t, search_value)
+local function table_contains(t, search_value)
     for k, v in pairs(t) do
         if v == search_value then
             return true
@@ -41,11 +41,11 @@ function table_contains(t, search_value)
     return false
 end
 
-function file_slurp(path)
+local function file_slurp(path)
     if not file_exists(path) then
         return nil
     else
-        f = io.open(path, "r")
+        local f = io.open(path, "r")
         local content = f:read("*all")
         f:close()
         return content
@@ -76,10 +76,17 @@ function API.bboxToZotero(bbox, places)
 end
 
 function API.bboxEqual(a, b, tolerance)
-    return (math.abs(a.x - b.x) < tolerance 
-        and math.abs(a.y - b.y) < tolerance 
-        and math.abs(a.w - b.w) < tolerance 
+    return (math.abs(a.x - b.x) < tolerance
+        and math.abs(a.y - b.y) < tolerance
+        and math.abs(a.w - b.w) < tolerance
         and math.abs(a.h - b.h) < tolerance)
+end
+
+function API.zotbboxEqual(a, b, tolerance)
+    return (math.abs(a[1] - b[1]) < tolerance
+        and math.abs(a[2] - b[2]) < tolerance
+        and math.abs(a[3] - b[3]) < tolerance
+        and math.abs(a[4] - b[4]) < tolerance)
 end
 
 function API.init(zotero_dir)
@@ -115,6 +122,72 @@ end
 
 function API.setLibraryVersion(version)
     return API.settings:saveSetting("library_version_nr", version)
+end
+
+-- List of zotero items that need to be synced to the server.  Items that are
+-- modified will have a "key" property, new items will not carry this property.
+function API.getModifiedItems()
+    if API.modified_items == nil then
+        API.modified_items = API.settings:readSetting("modified_items", {})
+    end
+
+    return API.modified_items
+end
+
+-- Write a new item that has been modified. Previous modifications to this item
+-- are overwritten.
+function API.addModifiedItem(item)
+    local i = API.getModifiedItems()
+
+    if item.key ~= nil then
+        i[item.key] = item
+    else
+        -- We assume that we are looking at an annotation that has been newly
+        -- created, it thus should have a bounding box property.
+        assert(item._meta ~= nil and item._meta.bboxes ~= nil)
+        local newBBoxes = item._meta.bboxes
+        local j = 1
+        local duplicateIdx = nil
+
+        -- Iterate over modified items without key to make sure we do not add
+        -- duplicates.
+        while i[j] ~= nil do
+            if i[j]._meta ~= nil
+                and i[j]._meta.bboxes ~= nil
+                and #i[j]._meta.bboxes == #newBBoxes then
+                print("Matching bboxes with ", j)
+
+                for k = 1, #newBBoxes do
+                    if API.zotbboxEqual(newBBoxes[k], i[j]._meta.bboxes[k], 1e-9) then
+                        duplicateIdx = j
+                        break
+                    end
+                end
+
+            end
+
+            j = j + 1
+            if duplicateIdx ~= nil then
+                break
+            end
+        end
+
+        if duplicateIdx == nil then
+            -- Duplicate not found, insert it as new item without a key
+            table.insert(i, item)
+            print("This item is really new!")
+        else
+            -- Just replace the duplicate, we assume its newer
+            i[duplicateIdx] = item
+            print("Replacing duplicate item", duplicateIdx)
+        end
+    end
+    API.settings:saveSetting("modified_items", API.getModifiedItems())
+end
+
+-- This just syncs them to disk, it will not modify the Zotero collection!
+function API.saveModifiedItems()
+    API.settings:flush()
 end
 
 function API.getFilterTag()
@@ -353,6 +426,20 @@ end
 --    return result, nil
 --end
 
+function API.getDirAndPath(attachmentKey)
+    local items = API.getItems()
+    local attachment = items[attachmentKey]
+
+    if attachment == nil then
+        return nil, nil
+    end
+
+    local targetDir = API.storage_dir .. "/" .. attachment.data.parentItem
+    local targetPath = targetDir .. "/" .. attachment.data.filename
+
+    return targetDir, targetPath
+end
+
 -- Downloads an attachment file to the correct directory and returns the path.
 -- If the local version is up to date, no network request is made.
 -- Before the download, the download_callback is called.
@@ -373,11 +460,10 @@ function API.downloadAndGetPath(key, download_callback)
 
     local attachment = item
 
-    local targetDir = API.storage_dir .. "/" .. attachment.data.parentItem
+    local targetDir, targetPath = API.getDirAndPath(key)
     lfs.mkdir(targetDir)
 
     local local_version = tonumber(file_slurp(targetDir .. "/version"))
-    local targetPath = targetDir .. "/" .. attachment.data.filename
 
     if local_version ~= nil and local_version >= attachment.version and file_exists(targetPath) then
         return targetPath, nil -- all done, local file is up to date
@@ -388,7 +474,7 @@ function API.downloadAndGetPath(key, download_callback)
     local url = attachment.links.enclosure.href
 
     print("Fetching " .. url)
-    r, c, h = http.request {
+    local r, c, h = http.request {
         url = url,
         headers = API.getHeaders(api_key),
         redirect = true,
@@ -468,7 +554,7 @@ function API.displaySearchResults(query)
     local results = {}
 
     for k, item in pairs(items) do
-        if item.data.itemType == "attachment" 
+        if item.data.itemType == "attachment"
             and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType )
             and item.data.parentItem ~= nil then
             local parentItem = items[item.data.parentItem]
@@ -491,6 +577,293 @@ function API.displaySearchResults(query)
     end
 
     return results
+end
+
+
+
+local function posEqual(a, b)
+    return (a.zoom == b.zoom
+        and a.rotation == b.rotation
+        and a.page == b.page
+        and a.x == b.x
+        and a.y == b.y)
+end
+
+-- List all highlights and entries of the document in a table.
+-- If they already have a Zotero Index, it will be used as key.
+-- Otherwise integer numbers are used.
+-- Each element will have the entries bookmark, bookmarkIndex, highlight, highlightIndex
+local function findHighlightsAndBookmarks(docSettings)
+    local results = {}
+
+    local bookmarks = docSettings:readSetting("bookmarks", {})
+    local highlight = docSettings:readSetting("highlight", {})
+
+    for bookmarkIndex, bookmark in ipairs(bookmarks or {}) do
+        if bookmark.highlighted == true then
+            -- We found a bookmark. Now find the corresponding highlight
+            --
+            -- Notice: this function has runtime O(nm) where n ≘ number of
+            -- bookmarks and m = number of highlights on a page. This could be
+            -- improved by making the highlight lookup smarter (sorted
+            -- hashtable), but the effect of this must first be tested with
+            -- benchmarks.
+            local idx, hl
+            for highlightIndex, highlight in ipairs(highlight[bookmark.page] or {}) do
+               if posEqual(highlight.pos0, bookmark.pos0)
+                   and posEqual(highlight.pos1, bookmark.pos1) then
+                   idx = highlightIndex
+                   hl = highlight
+                   break
+               end
+            end
+
+
+            if idx ~= nil then
+                -- We found both a highlight and the bookmark. Add it to the result list
+                local entry = {
+                    ["bookmark"] = bookmark,
+                    ["bookmarkIndex"] = bookmarkIndex,
+                    ["highlight"] = hl,
+                    ["highlightIndex"] = idx
+                }
+
+                if bookmark.zoteroKey ~= nil then
+                    results[bookmark.zoteroKey] = entry
+                else
+                    table.insert(results, entry)
+                end
+            end
+        end
+    end
+
+    return results
+end
+
+-- Output the timezone-agnostic timestamp, since KOReader uses timestamps with
+-- local time.
+function API.addTimezone(timestamp)
+    local year, month, day, hour, minute, second = string.match(timestamp,
+        "(%d%d%d%d)-(%d%d)-(%d%d) (%d%d):(%d%d):(%d%d)")
+    local time = {
+        ["year"] = year,
+        ["month"] = month,
+        ["day"] = day,
+        ["hour"] = hour,
+        ["min"] = minute,
+        ["sec"] = second
+    }
+
+    return os.date("!%Y-%m-%dT%H:%M:%SZ", os.time(time))
+end
+
+function API.localTimezone(timestamp)
+end
+
+function API.compareTimestamps(zoteroTimestamp, koreaderTimestamp)
+    local a,b = zoteroTimestamp, API.addTimezone(koreaderTimestamp)
+
+    if a == b then
+       return 0
+    elseif a < b then
+        return -1
+    else
+        return 1
+    end
+end
+
+local function modifiedZoteroAnnotation(annotation)
+    local result = {
+        ["data"] = {
+            ["annotationComment"] = annotation.bookmark.text or "",
+        },
+        ["key"] = annotation.bookmark.zoteroKey
+    }
+
+    return result
+end
+
+local function newZoteroAnnotation(annotation, parentKey)
+    local bboxes = {}
+    for k, v in ipairs(annotation.highlight.pboxes) do
+        table.insert(bboxes, {v.x, v.y, v.x + v.w, v.y + v.h})
+    end
+
+
+    local pos = {
+        ["pageIndex"] = annotation.bookmark.page,
+        ["rects"] = bboxes,
+    }
+    local result = {
+        ["data"] = {
+            ["annotationColor"] = "#ffd400",
+            ["annotationComment"] = annotation.bookmark.text or "",
+            ["annotationPageLabel"] = tostring(annotation.bookmark.page),
+            ["annotationType"] = "highlight",
+            ["annotationText"] = annotation.bookmark.notes or "",
+            ["annotationPosition"] = JSON.encode(pos),
+            ["itemType"] = "annotation",
+            ["parentItem"] = parentKey,
+        },
+        ["_meta"] = {
+            ["bboxes"] = bboxes,
+        },
+    }
+
+    return result
+end
+
+local function modifiedKoreaderAnnotation(koreaderAnnotation, zoteroAnnotation)
+    koreaderAnnotation.bookmark.text = zoteroAnnotation.data.annotationComment
+    koreaderAnnotation.bookmark.zoteroVersion = zoteroAnnotation.version
+    koreaderAnnotation.highlight.zoteroVersion = zoteroAnnotation.version
+
+end
+
+local function newKoreaderAnnotation(annotation)
+    local pos = JSON.decode(annotation.data.annotationPosition)
+    local page = pos.pageIndex
+
+    local rects = {}
+    for k, bbox in ipairs(pos.rects) do
+        table.insert(rects, {
+            ["x"] = bbox[1],
+            ["y"] = bbox[2],
+            ["w"] = bbox[3] - bbox[1],
+            ["h"] = bbox[4] - bbox[2],
+        })
+    end
+    assert(#rects > 0)
+
+    -- Take first bounding box
+    local pos0 = {
+        ["page"] = page,
+        ["rotation"] = 0,
+        ["x"] = rects[1].x,
+        ["y"] = rects[1].y + rects[1].h * 0.5,
+    }
+    -- Take last bounding box
+    local pos1 = {
+        ["page"] = page,
+        ["rotation"] = 0,
+        ["x"] = rects[#rects].x,
+        ["y"] = rects[#rects].y + rects[#rects].h * 0.5,
+    }
+
+    local datetime = os.date("%Y-%m-%d %H:%M:%S")
+
+    local r = {
+        ["bookmark"] = {
+            ["pos0"] = pos0,
+            ["pos1"] = pos1,
+            ["notes"] = annotation.data.annotationText,
+            ["datetime"] = datetime,
+            ["highlighted"] = true,
+            ["chapter"] = "",
+            ["page"] = tostring(page),
+            ["zoteroKey"] = annotation.key,
+            ["zoteroVersion"] = annotation.version,
+            ["text"] = annotation.data.annotationComment,
+        },
+        ["highlight"] = {
+            ["pos0"] = pos0,
+            ["pos1"] = pos1,
+            ["drawer"] = "lighten",
+            ["text"] = annotation.data.annotationText,
+            ["chapter"] = "",
+            ["pboxes"] = rects,
+        },
+    }
+
+    return r
+end
+
+-- Sync annotations from Zotero with sdr folder
+function API.syncAnnotations(itemKey)
+    local items = API.getItems()
+    local fileDir, filePath = API.getDirAndPath(itemKey)
+
+    if filePath == nil then
+        return "Error: could not find item"
+    end
+
+    print("Scanning collection")
+
+
+    -- Scan zotero annotations.
+    -- Add them to the docsettings if they are not there yet, or update them if
+    -- they already exist but are outdated
+    local zoteroAnnotations = {}
+    for annotationKey, annotation in pairs(API.getItems()) do
+        if annotation.data.parentItem == itemKey
+            and annotation.itemType == "annotation"
+            and annotation.data.annotationType == "highlight" then
+            zoteroAnnotations[annotationKey] = annotation
+        end
+    end
+
+    local docSettings = DocSettings:open(filePath)
+    local koreaderAnnotations = findHighlightsAndBookmarks(docSettings)
+    print("KOREader Annotations: ", JSON.encode(koreaderAnnotations))
+
+    -- Iterate over KOReader annotations, add modifications to zotero items
+    for annotationKey, annotation in ipairs(koreaderAnnotations) do
+        print("KOReader ", annotationKey)
+        if type(annotationKey) == "string" then
+            local zoteroAnnotation = zoteroAnnotations[annotationKey]
+            if annotation.bookmark.zoteroVersion == zoteroAnnotation.version and
+                annotation.bookmark.zoteroKey ~= nil then
+                -- The annotation already has an assigned Zotero key, just update the Zotero
+                local updated = modifiedZoteroAnnotation(annotation)
+                API.addModifiedItem(updated)
+                print("Updating zotero annotation ", annotation.bookmark.notes, annotation.bookmark.text)
+            else
+                -- The KOReader version is older, we keep the Zotero version
+                print("Zotero is newer: ", zoteroAnnotation.data.annotationText)
+            end
+        else
+            -- Create a new zotero annotation
+            local new = newZoteroAnnotation(annotation, itemKey)
+            print("Creating zotero annotation ", JSON.encode(new))
+            API.addModifiedItem(new)
+        end
+    end
+
+    local highlight = docSettings:readSetting("highlight", {})
+    local bookmark = docSettings:readSetting("bookmarks", {})
+    local modItems = API.getModifiedItems()
+
+    -- Iterate over Zotero annotations, add KOReader items if necessary
+    for annotationKey, annotation in ipairs(zoteroAnnotations) do
+        -- Try to find KOReader annotation
+        local koreaderAnnotation = koreaderAnnotations[annotationKey]
+
+        if koreaderAnnotation == nil then
+            -- There is no corresponding koreader annotation, just add a new one.
+            koreaderAnnotation = newKoreaderAnnotation(annotation)
+            table.insert(bookmark, koreaderAnnotation.bookmark)
+            table.insert(highlight, koreaderAnnotation.highlight)
+            print("Creating koreader annotation ", koreaderAnnotation.bookmark.notes, koreaderAnnotation.bookmark.text)
+        else
+            -- The koreader annotation already exists, try to update it.
+            if modItems[annotationKey] ~= nil then
+                -- The item was already modified, so the KOReader annotation was newer.
+                -- Skip update in this round.
+            else
+                bookmark[koreaderAnnotation.bookmarkIndex].text = annotation.data.annotationType
+            end
+        end
+    end
+
+    docSettings:saveSetting("highlight", highlight)
+    docSettings:saveSetting("bookmarks", bookmark)
+    API.saveModifiedItems()
+end
+
+function API.syncModifiedItems()
+    local modItems = API.getModifiedItems()
+
+
 end
 
 return API

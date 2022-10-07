@@ -92,6 +92,9 @@ function ZoteroBrowser:onMenuSelect(item)
         }
         UIManager:scheduleIn(0.05, function()
             local full_path, e = ZoteroAPI.downloadAndGetPath(item.key)
+            print("Trying to sync annotations")
+            ZoteroAPI.syncAnnotations(item.key)
+            print("Annot sync done")
             if e ~= nil then
                 local b = InfoMessage:new{
                     text = _("Could not open file.") .. e,
