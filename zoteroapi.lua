@@ -691,7 +691,7 @@ local function newZoteroAnnotation(annotation, parentKey)
 
 
     local pos = {
-        ["pageIndex"] = annotation.bookmark.page,
+        ["pageIndex"] = annotation.bookmark.page - 1,
         ["rects"] = bboxes,
     }
     local result = {
@@ -737,14 +737,14 @@ local function newKoreaderAnnotation(annotation)
 
     -- Take first bounding box
     local pos0 = {
-        ["page"] = page,
+        ["page"] = page + 1,
         ["rotation"] = 0,
         ["x"] = rects[1].x,
         ["y"] = rects[1].y + rects[1].h * 0.5,
     }
     -- Take last bounding box
     local pos1 = {
-        ["page"] = page,
+        ["page"] = page + 1,
         ["rotation"] = 0,
         ["x"] = rects[#rects].x,
         ["y"] = rects[#rects].y + rects[#rects].h * 0.5,
@@ -760,7 +760,7 @@ local function newKoreaderAnnotation(annotation)
             ["datetime"] = datetime,
             ["highlighted"] = true,
             ["chapter"] = "",
-            ["page"] = tostring(page),
+            ["page"] = page + 1,
             ["zoteroKey"] = annotation.key,
             ["zoteroVersion"] = annotation.version,
             ["text"] = annotation.data.annotationComment,
@@ -772,6 +772,7 @@ local function newKoreaderAnnotation(annotation)
             ["text"] = annotation.data.annotationText,
             ["chapter"] = "",
             ["pboxes"] = rects,
+            ["datetime"] = datetime,
         },
     }
 
@@ -796,7 +797,7 @@ function API.syncAnnotations(itemKey)
     local zoteroAnnotations = {}
     for annotationKey, annotation in pairs(API.getItems()) do
         if annotation.data.parentItem == itemKey
-            and annotation.itemType == "annotation"
+            and annotation.data.itemType == "annotation"
             and annotation.data.annotationType == "highlight" then
             zoteroAnnotations[annotationKey] = annotation
         end
@@ -833,18 +834,22 @@ function API.syncAnnotations(itemKey)
     local bookmark = docSettings:readSetting("bookmarks", {})
     local modItems = API.getModifiedItems()
 
+    print("Zotero annotations: ", JSON.encode(zoteroAnnotations))
     -- Iterate over Zotero annotations, add KOReader items if necessary
-    for annotationKey, annotation in ipairs(zoteroAnnotations) do
+    for annotationKey, annotation in pairs(zoteroAnnotations) do
         -- Try to find KOReader annotation
         local koreaderAnnotation = koreaderAnnotations[annotationKey]
 
         if koreaderAnnotation == nil then
             -- There is no corresponding koreader annotation, just add a new one.
             koreaderAnnotation = newKoreaderAnnotation(annotation)
+            local page = koreaderAnnotation.bookmark.page
             table.insert(bookmark, koreaderAnnotation.bookmark)
-            table.insert(highlight, koreaderAnnotation.highlight)
+            highlight[page] = highlight[page] or {}
+            table.insert(highlight[page], koreaderAnnotation.highlight)
             print("Creating koreader annotation ", koreaderAnnotation.bookmark.notes, koreaderAnnotation.bookmark.text)
         else
+            print("Modifying existing zotero annotation")
             -- The koreader annotation already exists, try to update it.
             if modItems[annotationKey] ~= nil then
                 -- The item was already modified, so the KOReader annotation was newer.
@@ -857,6 +862,7 @@ function API.syncAnnotations(itemKey)
 
     docSettings:saveSetting("highlight", highlight)
     docSettings:saveSetting("bookmarks", bookmark)
+    docSettings:flush()
     API.saveModifiedItems()
 end
 
