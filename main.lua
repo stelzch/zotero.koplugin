@@ -363,7 +363,6 @@ function Plugin:addToMainMenu(menu_items)
                     if not self:zoteroDatabaseExists() then
                         self:alertDatabaseNotReadable()
                     else
-                        self.zotero_dialog:init()
                         self.browser:init()
                         UIManager:show(self.zotero_dialog, "full", Geom:new{
                             w = Screen:getWidth(),
