@@ -121,8 +121,6 @@ WHERE path IS NOT NULL AND name LIKE ?;
 
 
 local ZoteroBrowser = Menu:extend{
-    width = Screen:getWidth(),
-    height = Screen:getHeight(),
     no_title = false,
     is_borderless = true,
     is_popout = false,
