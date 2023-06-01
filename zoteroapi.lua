@@ -44,12 +44,16 @@ end
 local function file_slurp(path)
     if not file_exists(path) then
         return nil
-    else
-        local f = io.open(path, "r")
-        local content = f:read("*all")
-        f:close()
-        return content
     end
+    local f = io.open(path, "r")
+
+    if f == nil then
+        return nil
+    end
+
+    local content = f:read("*all")
+    f:close()
+    return content
 end
 
 function API.cutDecimalPlaces(x, num_places)
