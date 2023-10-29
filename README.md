@@ -4,19 +4,34 @@ This addon for [KOReader](https://github.com/koreader/koreader) allows you to vi
 
 ## Features
 * Display collections, navigate to sub-collections
-* Open attached PDF files
+* Download & open attached PDF files
+* Supports WebDAV storage backend
 * Search entries by the title of the publication, name of the first author or DOI.
-
 
 
 ## Installation Guide
 1. Copy the files in this repository to `<KOReader>/plugins/zotero.koplugin`
-2. Copy your Zotero directory to your E-Reader (strictly speaking, `zotero.sqlite` and the `storage` directory suffice)
-3. Set the Zotero path under *Search > Zotero > Settings*
-4. Browse your Zotero collection under *Search > Zotero > Browse Database*
+2. Obtain an API token for your account by generating a new key in your [Zotero Settings](https://www.zotero.org/settings/keys). Note the userID and the private key.
+3. Set your credentials for Zotero either directly in KOReader or edit the configuration file as described [below](#manual-configuration).
 
-## Screencast
+## Configuration
 
-<video loop autoplay src="https://github.com/stelzch/screencasts/blob/main/screencast.m4v?raw=true">
-    <img src="contrib/screenshot.png" />
-</video>
+### WebDAV support
+If you do not want to pay Zotero for more storage, you can also store the attachments in a WebDAV folder like [Nextcloud](https://nextcloud.com).
+You can read more about how to set up WebDAV in the [Zotero manual](https://www.zotero.org/support/sync).
+
+### Manual configuration
+
+If you do not want to type in the account credentials on your E-Reader, you can also edit the settings file directly.
+Edit the `zotero/meta.lua` file inside the koreader directory and supply needed values:
+```lua
+-- we can read Lua syntax here!
+return {
+    ["api_key"] = "", -- API secret key
+    ["user_id"] = "", -- API user ID, should be an integer number
+    ["webdav_enabled"] = false,
+    ["webdav_url"] = "", -- URL to WebDAV zotero directory
+    ["webdav_user"] = "",
+    ["webdav_password"] = "",
+}
+```
