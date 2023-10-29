@@ -15,6 +15,7 @@ local Geom = require("ui/geometry")
 local _ = require("gettext")
 local ZoteroAPI = require("zoteroapi")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
+local lfs = require("libs/libkoreader-lfs")
 
 
 
@@ -163,7 +164,8 @@ function Plugin:checkInitialized()
 end
 
 function Plugin:initAPIAndBrowser()
-    self.zotero_dir_path = self.settings:readSetting("zotero_dir")
+    self.zotero_dir_path = DataStorage:getDataDir() .. "/zotero"
+    lfs.mkdir(self.zotero_dir_path)
     ZoteroAPI.init(self.zotero_dir_path)
     self.small_font_face = Font:getFace("smallffont")
     self.browser = ZoteroBrowser:new{
@@ -243,12 +245,6 @@ function Plugin:addToMainMenu(menu_items)
                 end,
                 sub_item_table = {
                     {
-                        text = _("Set Zotero directory"),
-                        callback = function()
-                            self:setZoteroDirectory()
-                        end,
-                    },
-                    {
                         text = _("Configure Zotero account"),
                         callback = function()
                             self:setAccount()
@@ -290,21 +286,6 @@ function Plugin:addToMainMenu(menu_items)
             }
         },
     }
-end
-
-function Plugin:setZoteroDirectory()
-    require("ui/downloadmgr"):new{
-        onConfirm = function(path)
-            self.settings:saveSetting("zotero_dir", path)
-            self.settings:flush()
-            local b = InfoMessage:new{
-                text = _("Restart KOReader for this setting to take effect"),
-                timeout = 3,
-                icon = "notice-info"
-            }
-            UIManager:show(b)
-        end,
-    }:chooseDir()
 end
 
 function Plugin:setAccount()
