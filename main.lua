@@ -137,9 +137,32 @@ function Plugin:onDispatcherRegisterActions()
 end
 
 function Plugin:init()
+    self.initialized = false
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
     self.settings = LuaSettings:open(("%s/%s"):format(DataStorage:getSettingsDir(), "zotero_settings.lua"))
+    xpcall(self.initAPIAndBrowser, self.initError, self)
+    self.initialized = true
+    print("Z: successfully initialized!")
+end
+
+function Plugin:initError(e)
+    print("Could not initialize Zotero: " .. e)
+end
+
+function Plugin:checkInitialized()
+    if not self.initialized  or self.browser == nil then
+        UIManager:show(InfoMessage:new{
+            text = _("Zotero not initialized. Please set the plugin directory first."),
+            timeout = 3,
+            icon = "notice-warning"
+        })
+    end
+
+    return self.initialized
+end
+
+function Plugin:initAPIAndBrowser()
     self.zotero_dir_path = self.settings:readSetting("zotero_dir")
     ZoteroAPI.init(self.zotero_dir_path)
     self.small_font_face = Font:getFace("smallffont")
@@ -159,6 +182,7 @@ function Plugin:init()
         self.browser
     }
     self.browser.show_parent = self.zotero_dialog
+    print("Z: Browser initialized")
 end
 
 function Plugin:addToMainMenu(menu_items)
@@ -169,6 +193,9 @@ function Plugin:addToMainMenu(menu_items)
             {
                 text = _("Browse"),
                 callback = function()
+                    if not self:checkInitialized() then
+                        return
+                    end
                     self.browser:init()
                     UIManager:show(self.zotero_dialog, "full", Geom:new{
                         w = Screen:getWidth(),
@@ -180,6 +207,9 @@ function Plugin:addToMainMenu(menu_items)
             {
                 text = _("Synchronize"),
                 callback = function()
+                    if not self:checkInitialized() then
+                        return
+                    end
                     UIManager:scheduleIn(1, function()
                         local e = ZoteroAPI.syncAllItems()
 
@@ -219,11 +249,43 @@ function Plugin:addToMainMenu(menu_items)
                         end,
                     },
                     {
-                        text = _("Configure account"),
+                        text = _("Configure Zotero account"),
                         callback = function()
                             self:setAccount()
                         end,
-                    }
+                    },
+                    {
+                        text = _("Enable WebDAV storage"),
+                        checked_func = function()
+                            return ZoteroAPI.getWebDAVEnabled()
+                        end,
+                        callback = function()
+                            ZoteroAPI.toggleWebDAVEnabled()
+                        end,
+                    },
+                    {
+                        text = _("Configure WebDAV account"),
+                        callback = function()
+                            self:setWebdavAccount()
+                        end,
+                    },
+                    {
+                        text = _("Check WebDAV connection"),
+                        callback = function()
+                            local msg = nil
+                            local result = ZoteroAPI.checkWebDAV()
+                            if result == nil then
+                                msg = _("Success, WebDAV works!")
+                            else
+                                msg = _("WebDAV could not connect: ") .. result
+                            end
+                            UIManager:show(InfoMessage:new{
+                                text = msg,
+                                timeout = 3,
+                                icon = "notice-info"
+                            })
+                        end,
+                    },
                 }
             }
         },
@@ -284,6 +346,7 @@ function Plugin:setAccount()
 
                         ZoteroAPI.setUserID(fields[1])
                         ZoteroAPI.setAPIKey(fields[2])
+                        ZoteroAPI.saveModifiedItems()
                         self.account_dialog:onClose()
                         UIManager:close(self.account_dialog)
                     end
@@ -294,6 +357,54 @@ function Plugin:setAccount()
     UIManager:show(self.account_dialog)
     self.account_dialog:onShowKeyboard()
 end
+
+function Plugin:setWebdavAccount()
+    self.webdav_account_dialog = MultiInputDialog:new{
+        title = _("Edit WebDAV credentials"),
+        fields = {
+            {
+                text = ZoteroAPI.getWebDAVUrl(),
+                hint = _("URL")
+            },
+            {
+                text = ZoteroAPI.getWebDAVUser(),
+                hint = _("Username"),
+            },
+            {
+                text = ZoteroAPI.getWebDAVPassword(),
+                hint = _("Password"),
+            },
+        },
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    id = "close",
+                    callback = function()
+                        self.webdav_account_dialog:onClose()
+                        UIManager:close(self.webdav_account_dialog)
+                    end
+                },
+                {
+                    text = _("Update"),
+                    callback = function()
+                        local fields = self.webdav_account_dialog:getFields()
+
+                        ZoteroAPI.setWebDAVUrl(fields[1])
+                        ZoteroAPI.setWebDAVUser(fields[2])
+                        ZoteroAPI.setWebDAVPassword(fields[3])
+                        ZoteroAPI.saveModifiedItems()
+                        self.webdav_account_dialog:onClose()
+                        UIManager:close(self.webdav_account_dialog)
+                    end
+                },
+            },
+        },
+    }
+    UIManager:show(self.webdav_account_dialog)
+    self.webdav_account_dialog:onShowKeyboard()
+end
+
 
 
 function Plugin:onZotero()

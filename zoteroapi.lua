@@ -6,14 +6,16 @@ local https = require("ssl.https")
 local JSON = require("json")
 local lfs = require("libs/libkoreader-lfs")
 local DocSettings = require("docsettings")
+local sha2 = require("ffi/sha2")
 
 -- Functions expect config parameter, a lua table with the following keys:
 -- zotero_dir: Path to a directory where cache files will be stored
 -- api_key: self-explanatory
 --
--- Directory layout of zotero_di
+-- Directory layout of zoteroapi
 -- /items.json: Contains all items
 -- /storage/<KEY>/filename.pdf: Actual PDF files
+-- /storage/<KEY>/version: Version number of downloaded attachment
 -- /meta.lua: Metadata containing library version, items etc.
 
 local API = {}
@@ -62,15 +64,19 @@ function API.cutDecimalPlaces(x, num_places)
 end
 
 function API.init(zotero_dir)
+    print("Z: initializing API")
     API.zotero_dir = zotero_dir
     local settings_path = BaseUtil.joinPath(API.zotero_dir, "meta.lua")
     print(settings_path)
     API.settings = LuaSettings:open(settings_path)
+    print("Z: settings opened")
 
     API.storage_dir = BaseUtil.joinPath(API.zotero_dir, "storage")
     if not file_exists(API.storage_dir) then
         lfs.mkdir(API.storage_dir)
     end
+
+    print("Z: storage dir" .. API.storage_dir)
 end
 
 function API.getAPIKey()
@@ -88,12 +94,75 @@ function API.setUserID(user_id)
     API.settings:saveSetting("user_id", user_id)
 end
 
+function API.getWebDAVEnabled()
+    return API.settings:isTrue("webdav_enabled")
+end
+function API.getWebDAVUser()
+    return API.settings:readSetting("webdav_user")
+end
+
+function API.getWebDAVPassword()
+    return API.settings:readSetting("webdav_password")
+end
+
+function API.getWebDAVUrl()
+    return API.settings:readSetting("webdav_url")
+end
+
+function API.toggleWebDAVEnabled()
+    API.settings:toggle("webdav_enabled")
+end
+
+function API.setWebDAVUser(user)
+    API.settings:saveSetting("webdav_user", user)
+end
+
+function API.setWebDAVPassword(password)
+    API.settings:saveSetting("webdav_password", password)
+end
+
+function API.setWebDAVUrl(url)
+    API.settings:saveSetting("webdav_url", url)
+end
+
 function API.getLibraryVersion()
     return API.settings:readSetting("library_version_nr", "0")
 end
 
 function API.setLibraryVersion(version)
     return API.settings:saveSetting("library_version_nr", version)
+end
+
+
+-- Check that a webdav connection works by performing a PROPFIND operation on the
+-- URL with the associated credentials.
+-- returns nil if no problems where found, otherwise error string
+function API.checkWebDAV()
+    local url = API.getWebDAVUrl()
+    if url == nil then
+        return "No WebDAV URL provided"
+    end
+
+    local user = API.getWebDAVUser()
+    local pass = API.getWebDAVPassword()
+    local headers = API.getWebDAVHeaders()
+
+    print("Requesting WebDAV url " .. url .. "With Headers " .. headers["Authorization"])
+
+    local b, c, h = http.request {
+        url = url,
+        method = "PROPFIND",
+        headers = headers
+    }
+    print("Request response: " .. c .. "\nBody: " .. b)
+
+    if c == 200 or c == 207 then
+        return nil
+    elseif c == 400 or c == 401 then
+        return "Reached server, but access forbidden. Check username and password."
+    end
+
+
 end
 
 -- List of zotero items that need to be synced to the server.  Items that are
@@ -371,24 +440,76 @@ function API.downloadAndGetPath(key, download_callback)
     if download_callback ~= nil then download_callback() end
 
     print("Z: attachment ", JSON.encode(attachment))
-    local url = "https://api.zotero.org/users/" .. API.getUserID() .. "/items/" .. key .. "/file"
+    if API.settings:isTrue("webdav_enabled") then
+        local result, errormsg = API.downloadWebDAV(key, targetDir, targetPath)
+        if result == nil then
+            return nil, errormsg
+        end
+    else
+        local url = "https://api.zotero.org/users/" .. API.getUserID() .. "/items/" .. key .. "/file"
+        print("Fetching " .. url)
 
-    print("Fetching " .. url)
-    local r, c, h = http.request {
-        url = url,
-        headers = API.getHeaders(api_key),
-        redirect = true,
-        sink = ltn12.sink.file(io.open(targetPath, "wb"))
-    }
+        local r, c, h = http.request {
+            url = url,
+            headers = API.getHeaders(api_key),
+            redirect = true,
+            sink = ltn12.sink.file(io.open(targetPath, "wb"))
+        }
 
-    local e = API.verifyResponse(r, c)
-    if e ~= nil then return nil, e end
+        local e = API.verifyResponse(r, c)
+        if e ~= nil then return nil, e end
+    end
 
     local versionFile = io.open(targetDir .. "/version", "w")
+    if versionFile == nil then
+        return nil, "Could not write version file"
+    end
     versionFile:write(tostring(attachment.version))
     versionFile:close()
 
     return targetPath, nil
+end
+
+function API.downloadWebDAV(key, targetDir, targetPath)
+    if API.getWebDAVUrl() == nil then
+        return nil, "WebDAV url not set"
+    end
+    local url = API.getWebDAVUrl() .. "/" .. key .. ".zip"
+    local headers = API.getWebDAVHeaders()
+    local zipPath = targetDir .. "/" .. key .. ".zip"
+    print("Fetching URL " .. url)
+    local r, c, h = http.request {
+        method = "GET",
+        url = url,
+        headers = headers,
+        redirect = true,
+        sink = ltn12.sink.file(io.open(zipPath, "wb"))
+    }
+
+    if c ~= 200 then
+        return nil, "Download failed with status code " .. c
+    end
+
+    -- Zotero WebDAV storage packs documents inside a zipfile
+    local zip_cmd = "unzip -qqu '" .. zipPath .. "' -d '" .. targetDir .. "'"
+    print("Unzipping with " .. zip_cmd)
+    local zip_result = os.execute(zip_cmd)
+    if zip_result then
+        return targetPath
+    else
+        return nil, "Unzipping failed"
+    end
+
+    local remove_result = os.remove(zipPath)
+end
+
+function API.getWebDAVHeaders()
+    local user = API.getWebDAVUser() or ""
+    local pass = API.getWebDAVPassword() or ""
+
+    return {
+        ["Authorization"] = "Basic " .. sha2.bin_to_base64(user .. ":" .. pass)
+    }
 end
 
 -- Return a table of entries of a collection.
@@ -447,6 +568,7 @@ function API.displayCollection(key)
 end
 
 function API.displaySearchResults(query)
+    print("displaySearchResults for " .. query)
     local queryRegex = ".*" .. string.gsub(query, " ", ".*") .. ".*"
     print("Searching for " .. queryRegex)
     -- Careful: linear search. Can be optimized quite a bit!
