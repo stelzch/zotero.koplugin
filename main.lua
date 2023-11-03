@@ -20,8 +20,6 @@ local lfs = require("libs/libkoreader-lfs")
 
 
 local ZoteroBrowser = Menu:extend{
-    width = Screen:getWidth(),
-    height = Screen:getHeight(),
     no_title = false,
     is_borderless = true,
     is_popout = false,
@@ -199,16 +197,12 @@ function Plugin:addToMainMenu(menu_items)
                         return
                     end
 
-                    if not self:zoteroDatabaseExists() then
-                        self:alertDatabaseNotReadable()
-                    else
-                        self.browser:init()
-                        UIManager:show(self.zotero_dialog, "full", Geom:new{
-                            w = Screen:getWidth(),
-                            h = Screen:getHeight()
-                        })
-                        self.browser:displayCollection(nil)
-                    end
+                    self.browser:init()
+                    UIManager:show(self.zotero_dialog, "full", Geom:new{
+                        w = Screen:getWidth(),
+                        h = Screen:getHeight()
+                    })
+                    self.browser:displayCollection(nil)
                     self.browser:init()
                     UIManager:show(self.zotero_dialog, "full", Geom:new{
                         w = Screen:getWidth(),
