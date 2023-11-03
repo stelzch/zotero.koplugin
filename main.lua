@@ -6,7 +6,6 @@ local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local LuaSettings = require("frontend/luasettings")
 local DataStorage = require("datastorage")
-local SQ3 = require("lua-ljsqlite3/init")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Device = require("device")
 local Screen = Device.screen
@@ -14,110 +13,10 @@ local Font = require("ui/font")
 local Menu = require("ui/widget/menu")
 local Geom = require("ui/geometry")
 local _ = require("gettext")
+local ZoteroAPI = require("zoteroapi")
+local MultiInputDialog = require("ui/widget/multiinputdialog")
+local lfs = require("libs/libkoreader-lfs")
 
-
-local MAX_RESULTS = 200
-
-
-
--- first parameter: collection id (NULL for root collection)
-local SUB_COLLECTION_QUERY = [[
-SELECT collectionID, collectionName FROM collections
-WHERE parentCollectionID IS ?;
-]]
-
--- first parameter: collection id (NULL for root collection)
-local ITEM_QUERY = [[
-SELECT author || " - " || title AS name, path FROM (
-SELECT
-creators.firstName || " " || creators.lastName AS author,
-(
-	SELECT value FROM itemData
-	LEFT JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
-	WHERE
-	itemData.itemID = items.itemID AND
-	itemData.fieldID = (SELECT fieldID FROM fields WHERE fieldName = 'title')
-) AS title,
-(
-	SELECT attachItem.key || "/" || substr(path, 9) FROM itemAttachments
-	LEFT JOIN items AS attachItem ON attachItem.itemID = itemAttachments.itemID
-	WHERE itemAttachments.parentItemID = items.itemID AND
-		contentType = 'application/pdf' AND
-		path LIKE 'storage:%'
-	LIMIT 1
-) AS path
- FROM collectionItems
-	LEFT JOIN items ON items.itemID = collectionItems.itemID
-	LEFT JOIN itemCreators ON items.itemID = itemCreators.itemID
-	LEFT JOIN creators ON itemCreators.creatorID = creators.creatorID
-	WHERE itemCreators.orderIndex = 0 AND collectionItems.collectionID IS ?
-)
-WHERE path IS NOT NULL;
-]]
-
-local ROOT_ITEM_QUERY = [[
-SELECT author || " - " || title AS name, path FROM (
-SELECT
-creators.firstName || " " || creators.lastName AS author,
-(
-	SELECT value FROM itemData
-	LEFT JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
-	WHERE
-	itemData.itemID = items.itemID AND
-	itemData.fieldID = (SELECT fieldID FROM fields WHERE fieldName = 'title')
-) AS title,
-(
-	SELECT attachItem.key || "/" || substr(path, 9) FROM itemAttachments
-	LEFT JOIN items AS attachItem ON attachItem.itemID = itemAttachments.itemID
-	WHERE itemAttachments.parentItemID = items.itemID AND
-		contentType = 'application/pdf' AND
-		path LIKE 'storage:%'
-	LIMIT 1
-) AS path
- FROM items
-	LEFT JOIN itemCreators ON items.itemID = itemCreators.itemID
-	LEFT JOIN creators ON itemCreators.creatorID = creators.creatorID
-	WHERE itemCreators.orderIndex = 0 
-        AND items.itemID NOT IN (SELECT DISTINCT itemID FROM collectionItems)
-)
-WHERE path IS NOT NULL;
-]]
-
--- first parameter: search query for first author and title
-local SEARCH_QUERY = [[
-SELECT author || " - " || title || COALESCE(" - " || doi, "") AS name, path FROM (
-SELECT
-creators.firstName || " " || creators.lastName AS author,
-(
-	SELECT value FROM itemData
-	LEFT JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
-	WHERE
-	itemData.itemID = items.itemID AND
-	itemData.fieldID = (SELECT fieldID FROM fields WHERE fieldName = 'title')
-) AS title,
-(
-	SELECT attachItem.key || "/" || substr(path, 9) FROM itemAttachments
-	LEFT JOIN items AS attachItem ON attachItem.itemID = itemAttachments.itemID
-	WHERE itemAttachments.parentItemID = items.itemID AND
-		contentType = 'application/pdf' AND
-		path LIKE 'storage:%'
-	LIMIT 1
-) AS path,
-(
-    SELECT value FROM itemData
-    LEFT JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
-    WHERE
-        itemData.itemID = items.itemID AND
-        itemData.fieldID = (SELECT fieldID FROM fields WHERE fieldName = 'DOI')
-    LIMIT 1
-) AS doi
- FROM items
-	LEFT JOIN itemCreators ON items.itemID = itemCreators.itemID
-	LEFT JOIN creators ON itemCreators.creatorID = creators.creatorID
-	WHERE itemCreators.orderIndex = 0
-)
-WHERE path IS NOT NULL AND name LIKE ?;
-]]
 
 
 local ZoteroBrowser = Menu:extend{
@@ -128,8 +27,8 @@ local ZoteroBrowser = Menu:extend{
     is_popout = false,
     parent = nil,
     title_bar_left_icon = "appbar.search",
-    covers_full_screen = true
---    return_arrow_propagation = false
+    covers_full_screen = true,
+    return_arrow_propagation = false
 }
 
 
@@ -168,8 +67,6 @@ function ZoteroBrowser:onLeftButtonTap()
     }
     UIManager:show(search_query_dialog)
     search_query_dialog:onShowKeyboard()
-
-
 end
 
 
@@ -185,104 +82,41 @@ end
 
 
 function ZoteroBrowser:onMenuSelect(item)
-    if item.collectionID ~= nil then
-        table.insert(self.paths, item.collectionID)
-        self:displayCollection(item.collectionID)
-    elseif item.path ~= nil then
-        local full_path = self.zotero_dir_path .. "/storage/" .. item.path
-        local ReaderUI = require("apps/reader/readerui")
-        self.close_callback()
-        ReaderUI:showReader(full_path)
+    if item.collection ~= nil then
+        table.insert(self.paths, item.key)
+        self:displayCollection(item.key)
+    else
+        self.download_dialog = InfoMessage:new{
+            text = _("Downloading file"),
+            timeout = 5,
+            icon = "notice-info",
+        }
+        UIManager:scheduleIn(0.05, function()
+            local full_path, e = ZoteroAPI.downloadAndGetPath(item.key)
+            if e ~= nil then
+                local b = InfoMessage:new{
+                    text = _("Could not open file.") .. e,
+                    timeout = 5,
+                    icon = "notice-warning"
+                }
+                UIManager:show(b)
+            else
+                UIManager:close(self.download_dialog)
+                local ReaderUI = require("apps/reader/readerui")
+                self.close_callback()
+                ReaderUI:showReader(full_path)
+            end
+        end)
+        UIManager:show(self.download_dialog)
     end
 end
 
 function ZoteroBrowser:displaySearchResults(query)
-    local cur_path = self.paths[#self.paths]
-    if cur_path ~= nil and type(cur_path) == "string" then
-        -- Replace the currently displayed search query
-        self.paths[#self.paths] = query
-    else
-        -- Insert search query as path
-        table.insert(self.paths, query)
-    end
-
-
-    query = "%" .. string.gsub(query, " ", "%%") .. "%"
-    local db_path = ("%s/zotero.sqlite"):format(self.zotero_dir_path)
-    self.conn = SQ3.open(db_path, "ro")
-    local searchStmt = self.conn:prepare(SEARCH_QUERY):reset():bind(query)
-    local searchResults, nrecords = searchStmt:resultset("hik", MAX_RESULTS)
-    self.conn:close()
-    searchResults = searchResults or {{}, {}}
-
-    local menu_items = {}
-    if nrecords == 0 then
-        table.insert(menu_items,
-        {
-            text = "No search results."
-        })
-    else
-        for i=1,#searchResults[1] do
-            table.insert(menu_items,
-            {
-                text = searchResults[1][i],
-                path = searchResults[2][i],
-            })
-        end
-    end
-
-    self:setItems(menu_items)
+    self:setItems(ZoteroAPI.displaySearchResults(query))
 end
 
 function ZoteroBrowser:displayCollection(collection_id)
-    local db_path = ("%s/zotero.sqlite"):format(self.zotero_dir_path)
-    self.conn = SQ3.open(db_path, "ro")
-
-    -- add collections (folders)
-    local collectionStmt = self.conn:prepare(SUB_COLLECTION_QUERY):reset():bind(collection_id)
-    local collectionResults, nrecord = collectionStmt:resultset("hik", MAX_RESULTS)
-    local itemStmt
-    if collection_id == nil then
-        itemStmt = self.conn:prepare(ROOT_ITEM_QUERY):reset()
-    else
-        itemStmt = self.conn:prepare(ITEM_QUERY):reset():bind(collection_id)
-    end
-    local itemResults, nrecord2 = itemStmt:resultset("hik", MAX_RESULTS)
-    collectionResults = collectionResults or {{},{}}
-    itemResults = itemResults or {{}, {}}
-    self.conn:close()
-
-    local results = {}
-
-    if nrecord + nrecord2 == 0 then
-        table.insert(results,
-        {
-            text = "<EMPTY>"
-        })
-    end
-
-    if nrecord ~= 0 then
-        for i=1,#collectionResults[1] do
-            table.insert(results,
-            {
-                text = collectionResults[2][i] .. "/",
-                collectionID = collectionResults[1][i]
-            })
-        end
-    end
-
-    -- add items (papers)
-    if nrecord2 ~= 0 then
-        for i=1,#itemResults[1] do
-            table.insert(results,
-            {
-                text = itemResults[1][i],
-                path = itemResults[2][i]
-            })
-        end
-    end
-
-    self:setItems(results)
+    self:setItems(ZoteroAPI.displayCollection(collection_id))
 end
 
 function ZoteroBrowser:setItems(items)
@@ -304,13 +138,37 @@ function Plugin:onDispatcherRegisterActions()
 end
 
 function Plugin:init()
+    self.initialized = false
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
     self.settings = LuaSettings:open(("%s/%s"):format(DataStorage:getSettingsDir(), "zotero_settings.lua"))
-    self.zotero_dir_path = self.settings:readSetting("zotero_dir")
+    xpcall(self.initAPIAndBrowser, self.initError, self)
+    self.initialized = true
+    print("Z: successfully initialized!")
+end
+
+function Plugin:initError(e)
+    print("Could not initialize Zotero: " .. e)
+end
+
+function Plugin:checkInitialized()
+    if not self.initialized  or self.browser == nil then
+        UIManager:show(InfoMessage:new{
+            text = _("Zotero not initialized. Please set the plugin directory first."),
+            timeout = 3,
+            icon = "notice-warning"
+        })
+    end
+
+    return self.initialized
+end
+
+function Plugin:initAPIAndBrowser()
+    self.zotero_dir_path = DataStorage:getDataDir() .. "/zotero"
+    lfs.mkdir(self.zotero_dir_path)
+    ZoteroAPI.init(self.zotero_dir_path)
     self.small_font_face = Font:getFace("smallffont")
     self.browser = ZoteroBrowser:new{
-        zotero_dir_path = self.zotero_dir_path,
         refresh_callback = function()
             UIManager:setDirty(self.zotero_dialog)
             self.ui:onRefresh()
@@ -326,30 +184,7 @@ function Plugin:init()
         self.browser
     }
     self.browser.show_parent = self.zotero_dialog
-end
-
-
-function Plugin:zoteroDatabaseExists()
-    if self.zotero_dir_path == nil or self.zotero_dir_path == "" then
-        return false
-    end
-
-    local f = io.open((self.zotero_dir_path .. "/zotero.sqlite"), "r")
-    if f~= nil then
-        io.close()
-        return true
-    else
-        return false
-    end
-end
-
-function Plugin:alertDatabaseNotReadable()
-    local b = InfoMessage:new{
-        text = _("The Zotero database file is not readable. Please try setting the correct Zotero directory."),
-        timeout = 5,
-        icon = "notice-warning"
-    }
-    UIManager:show(b)
+    print("Z: Browser initialized")
 end
 
 function Plugin:addToMainMenu(menu_items)
@@ -358,8 +193,12 @@ function Plugin:addToMainMenu(menu_items)
         sorting_hint = "search",
         sub_item_table = {
             {
-                text = _("Browse Database"),
+                text = _("Browse"),
                 callback = function()
+                    if not self:checkInitialized() then
+                        return
+                    end
+
                     if not self:zoteroDatabaseExists() then
                         self:alertDatabaseNotReadable()
                     else
@@ -370,7 +209,45 @@ function Plugin:addToMainMenu(menu_items)
                         })
                         self.browser:displayCollection(nil)
                     end
+                    self.browser:init()
+                    UIManager:show(self.zotero_dialog, "full", Geom:new{
+                        w = Screen:getWidth(),
+                        h = Screen:getHeight()
+                    })
+                    self.browser:displayCollection(nil)
                 end,
+            },
+            {
+                text = _("Synchronize"),
+                callback = function()
+                    if not self:checkInitialized() then
+                        return
+                    end
+                    UIManager:scheduleIn(1, function()
+                        local e = ZoteroAPI.syncAllItems()
+
+                        if e == nil then
+                            UIManager:show(InfoMessage:new{
+                                text = _("Success."),
+                                timeout = 3,
+                                icon = "check"
+                            })
+                        else
+                            UIManager:show(InfoMessage:new{
+                                text = e,
+                                timeout = 3,
+                                icon = "notice-warning"
+                            })
+                        end
+                    end)
+
+                    UIManager:show(InfoMessage:new{
+                        text = _("Synchronizing Zotero library. This might take some time."),
+                        timeout = 3,
+                        icon = "notice-info"
+                    })
+                end,
+
             },
             {
                 text = _("Settings"),
@@ -379,38 +256,148 @@ function Plugin:addToMainMenu(menu_items)
                 end,
                 sub_item_table = {
                     {
-                        text = _("Set Zotero directory"),
+                        text = _("Configure Zotero account"),
                         callback = function()
-                            self:setZoteroDirectory()
+                            self:setAccount()
                         end,
-                    }
+                    },
+                    {
+                        text = _("Enable WebDAV storage"),
+                        checked_func = function()
+                            return ZoteroAPI.getWebDAVEnabled()
+                        end,
+                        callback = function()
+                            ZoteroAPI.toggleWebDAVEnabled()
+                        end,
+                    },
+                    {
+                        text = _("Configure WebDAV account"),
+                        callback = function()
+                            self:setWebdavAccount()
+                        end,
+                    },
+                    {
+                        text = _("Check WebDAV connection"),
+                        callback = function()
+                            local msg = nil
+                            local result = ZoteroAPI.checkWebDAV()
+                            if result == nil then
+                                msg = _("Success, WebDAV works!")
+                            else
+                                msg = _("WebDAV could not connect: ") .. result
+                            end
+                            UIManager:show(InfoMessage:new{
+                                text = msg,
+                                timeout = 3,
+                                icon = "notice-info"
+                            })
+                        end,
+                    },
                 }
             }
         },
     }
 end
 
-function Plugin:setZoteroDirectory()
-    require("ui/downloadmgr"):new{
-        onConfirm = function(path)
-            self.zotero_dir_path = path
-            self.zotero_dialog.zotero_dir_path = path
-            self.browser.zotero_dir_path = path
-            self.settings:saveSetting("zotero_dir", self.zotero_dir_path)
-            self.settings:flush()
-            if not self:zoteroDatabaseExists() then
-                self:alertDatabaseNotReadable()
-            else
-                local b = InfoMessage:new{
-                    text = _("Success! Your Zotero library should now be accessible."),
-                    timeout = 3,
-                    icon = "check"
-                }
-                UIManager:show(b)
-            end
-        end,
-    }:chooseDir()
+function Plugin:setAccount()
+    print(ZoteroAPI.getUserID())
+    self.account_dialog = MultiInputDialog:new{
+        title = _("Edit User Info"),
+        fields = {
+            {
+                text = ZoteroAPI.getUserID(),
+                hint = _("User ID (integer)"),
+            },
+            {
+                text = ZoteroAPI.getAPIKey(),
+                hint = _("API Key"),
+            },
+        },
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    id = "close",
+                    callback = function()
+                        self.account_dialog:onClose()
+                        UIManager:close(self.account_dialog)
+                    end
+                },
+                {
+                    text = _("Update"),
+                    callback = function()
+                        local fields = self.account_dialog:getFields()
+                        if not string.match(fields[1], "[0-9]+") then
+                            UIManager:show(InfoMessage:new{
+                                text = _("The User ID must be an integer number."),
+                                timeout = 3,
+                                icon = "notice-warning"
+                            })
+                            return
+                        end
+
+                        ZoteroAPI.setUserID(fields[1])
+                        ZoteroAPI.setAPIKey(fields[2])
+                        ZoteroAPI.saveModifiedItems()
+                        self.account_dialog:onClose()
+                        UIManager:close(self.account_dialog)
+                    end
+                },
+            },
+        },
+    }
+    UIManager:show(self.account_dialog)
+    self.account_dialog:onShowKeyboard()
 end
+
+function Plugin:setWebdavAccount()
+    self.webdav_account_dialog = MultiInputDialog:new{
+        title = _("Edit WebDAV credentials"),
+        fields = {
+            {
+                text = ZoteroAPI.getWebDAVUrl(),
+                hint = _("URL")
+            },
+            {
+                text = ZoteroAPI.getWebDAVUser(),
+                hint = _("Username"),
+            },
+            {
+                text = ZoteroAPI.getWebDAVPassword(),
+                hint = _("Password"),
+            },
+        },
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    id = "close",
+                    callback = function()
+                        self.webdav_account_dialog:onClose()
+                        UIManager:close(self.webdav_account_dialog)
+                    end
+                },
+                {
+                    text = _("Update"),
+                    callback = function()
+                        local fields = self.webdav_account_dialog:getFields()
+
+                        ZoteroAPI.setWebDAVUrl(fields[1])
+                        ZoteroAPI.setWebDAVUser(fields[2])
+                        ZoteroAPI.setWebDAVPassword(fields[3])
+                        ZoteroAPI.saveModifiedItems()
+                        self.webdav_account_dialog:onClose()
+                        UIManager:close(self.webdav_account_dialog)
+                    end
+                },
+            },
+        },
+    }
+    UIManager:show(self.webdav_account_dialog)
+    self.webdav_account_dialog:onShowKeyboard()
+end
+
+
 
 function Plugin:onZotero()
 
