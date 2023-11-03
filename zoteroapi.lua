@@ -491,7 +491,7 @@ function API.downloadWebDAV(key, targetDir, targetPath)
     end
 
     -- Zotero WebDAV storage packs documents inside a zipfile
-    local zip_cmd = "unzip -qqu '" .. zipPath .. "' -d '" .. targetDir .. "'"
+    local zip_cmd = "unzip -qq '" .. zipPath .. "' -d '" .. targetDir .. "'"
     print("Unzipping with " .. zip_cmd)
     local zip_result = os.execute(zip_cmd)
     if zip_result then
