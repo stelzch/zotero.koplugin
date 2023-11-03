@@ -2,11 +2,17 @@
 
 This addon for [KOReader](https://github.com/koreader/koreader) allows you to view your Zotero collections.
 
+**Beta version**! Please report bugs, pull requests are welcome.
+
+<div align="center"><img width="600" alt="Screenshot of this plugin displaying a list of papers alongside a search button" src="https://raw.githubusercontent.com/stelzch/screencasts/main/zotero-koplugin-screenshot.png"></div>
+
 ## Features
 * Display collections, navigate to sub-collections
 * Download & open attached PDF files
 * Supports WebDAV storage backend
 * Search entries by the title of the publication, name of the first author or DOI.
+
+
 
 
 ## Installation Guide
