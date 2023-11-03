@@ -2,20 +2,42 @@
 
 This addon for [KOReader](https://github.com/koreader/koreader) allows you to view your Zotero collections.
 
+**Beta version**! Please report bugs, pull requests are welcome.
+
+<div align="center"><img width="600" alt="Screenshot of this plugin displaying a list of papers alongside a search button" src="https://raw.githubusercontent.com/stelzch/screencasts/main/zotero-koplugin-screenshot.png"></div>
+
 ## Features
 * Display collections, navigate to sub-collections
-* Open attached PDF files
+* Download & open attached PDF files
+* Supports WebDAV storage backend
 * Search entries by the title of the publication, name of the first author or DOI.
+
 
 
 
 ## Installation Guide
 1. Copy the files in this repository to `<KOReader>/plugins/zotero.koplugin`
-2. Copy your Zotero directory to your E-Reader (strictly speaking, `zotero.sqlite` and the `storage` directory suffice)
-3. Set the Zotero path under *Search > Zotero > Settings*
-4. Browse your Zotero collection under *Search > Zotero > Browse Database*
+2. Obtain an API token for your account by generating a new key in your [Zotero Settings](https://www.zotero.org/settings/keys). Note the userID and the private key.
+3. Set your credentials for Zotero either directly in KOReader or edit the configuration file as described [below](#manual-configuration).
 
-## Screencast
+## Configuration
 
+### WebDAV support
+If you do not want to pay Zotero for more storage, you can also store the attachments in a WebDAV folder like [Nextcloud](https://nextcloud.com).
+You can read more about how to set up WebDAV in the [Zotero manual](https://www.zotero.org/support/sync).
 
-https://user-images.githubusercontent.com/8364768/185810799-63bd154f-e465-4c55-86d0-4305132d4ef3.mp4
+### Manual configuration
+
+If you do not want to type in the account credentials on your E-Reader, you can also edit the settings file directly.
+Edit the `zotero/meta.lua` file inside the koreader directory and supply needed values:
+```lua
+-- we can read Lua syntax here!
+return {
+    ["api_key"] = "", -- API secret key
+    ["user_id"] = "", -- API user ID, should be an integer number
+    ["webdav_enabled"] = false,
+    ["webdav_url"] = "", -- URL to WebDAV zotero directory
+    ["webdav_user"] = "",
+    ["webdav_password"] = "",
+}
+```
