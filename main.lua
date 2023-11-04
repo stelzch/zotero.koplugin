@@ -294,7 +294,6 @@ function Plugin:addToMainMenu(menu_items)
 end
 
 function Plugin:setAccount()
-    print(ZoteroAPI.getUserID())
     self.account_dialog = MultiInputDialog:new{
         title = _("Edit User Info"),
         fields = {
