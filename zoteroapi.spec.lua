@@ -20,8 +20,6 @@ describe("Zotero API Client", function()
         ["Zotero-API-Version"] = "3"
     }
 
-    print("'" .. headers["Zotero-API-Key"] .. "'")
-
     --it("can tell the size of collections", function()
     --    local r, e = ZoteroAPI.fetchCollectionSize(
     --        ("https://api.zotero.org/users/%s/items"):format(USER_ID), headers

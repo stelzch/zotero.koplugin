@@ -147,14 +147,11 @@ function API.checkWebDAV()
     local pass = API.getWebDAVPassword()
     local headers = API.getWebDAVHeaders()
 
-    print("Requesting WebDAV url " .. url .. "With Headers " .. headers["Authorization"])
-
     local b, c, h = http.request {
         url = url,
         method = "PROPFIND",
         headers = headers
     }
-    print("Request response: " .. c .. "\nBody: " .. b)
 
     if c == 200 or c == 207 then
         return nil
@@ -256,7 +253,6 @@ function API.fetchCollectionSize(collection_url, headers)
     local e = API.verifyResponse(r, c)
     if e ~= nil then return nil, e end
 
-    print(JSON.encode(h))
     local total_results = tonumber(h["total-results"])
     if total_results == nil or total_results < 0 then
         return nil, "Error: could not determine number of items in library"
@@ -439,7 +435,6 @@ function API.downloadAndGetPath(key, download_callback)
 
     if download_callback ~= nil then download_callback() end
 
-    print("Z: attachment ", JSON.encode(attachment))
     if API.settings:isTrue("webdav_enabled") then
         local result, errormsg = API.downloadWebDAV(key, targetDir, targetPath)
         if result == nil then
@@ -553,7 +548,6 @@ function API.displayCollection(key)
                 local author = parentItem.meta.creatorSummary or "Unknown"
                 local name = author .. " - " .. parentItem.data.title
 
-                print("Content: " .. item.data.contentType .. "\n" .. JSON.encode(item))
                 table.insert(collectionItems, {
                     ["key"] = k,
                     ["text"] = name
