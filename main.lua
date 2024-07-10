@@ -203,12 +203,6 @@ function Plugin:addToMainMenu(menu_items)
                         h = Screen:getHeight()
                     })
                     self.browser:displayCollection(nil)
-                    self.browser:init()
-                    UIManager:show(self.zotero_dialog, "full", Geom:new{
-                        w = Screen:getWidth(),
-                        h = Screen:getHeight()
-                    })
-                    self.browser:displayCollection(nil)
                 end,
             },
             {
