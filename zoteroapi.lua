@@ -544,16 +544,30 @@ function API.displayCollection(key)
             and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType )
             and item.data.parentItem ~= nil then
             local parentItem = items[item.data.parentItem]
-            if parentItem ~= nil and table_contains(parentItem.data.collections, key) then
-                local author = parentItem.meta.creatorSummary or "Unknown"
-                local name = author .. " - " .. parentItem.data.title
+            if parentItem ~= nil then
+				local displayItem = false
+				if key == nil then
+					-- We are dealing with the root collection here
+					if #parentItem.data.collections == 0 then 
+					-- this entry is not part of the collection and will be shown as part of the root collection
+						displayItem = true
+					end
+				elseif table_contains(parentItem.data.collections, key) then
+					-- this entry is not part of the collection specified by key
+					displayItem = true
+				end
+			
+				if displayItem then
+					local author = parentItem.meta.creatorSummary or "Unknown"
+					local name = author .. " - " .. parentItem.data.title
 
-                table.insert(collectionItems, {
-                    ["key"] = k,
-                    ["text"] = name
-                })
-            end
-        end
+					table.insert(collectionItems, {
+						["key"] = k,
+						["text"] = name
+					})
+				end
+			end
+		end
     end
     table.sort(collectionItems, comparator)
 
