@@ -147,7 +147,7 @@ function API.checkWebDAV()
     local pass = API.getWebDAVPassword()
     local headers = API.getWebDAVHeaders()
 
-    local b, c, h = http.request {
+    local b, c, h = https.request {
         url = url,
         method = "PROPFIND",
         headers = headers
@@ -244,7 +244,7 @@ end
 
 function API.fetchCollectionSize(collection_url, headers)
     print("Determining size of '" .. collection_url .. "'")
-    local r, c, h = http.request {
+    local r, c, h = https.request {
         method = "HEAD",
         url = collection_url,
         headers = headers
@@ -284,7 +284,7 @@ function API.fetchCollectionPaginated(collection_url, headers, callback)
         print("Fetching page ", item_nr, page_url)
 
         local page_data = {}
-        local r, c, h = http.request {
+        local r, c, h = https.request {
             method = "GET",
             url = page_url,
             headers = headers,
@@ -444,10 +444,10 @@ function API.downloadAndGetPath(key, download_callback)
         local url = "https://api.zotero.org/users/" .. API.getUserID() .. "/items/" .. key .. "/file"
         print("Fetching " .. url)
 
-        local r, c, h = http.request {
+        local r, c, h = https.request {
             url = url,
             headers = API.getHeaders(api_key),
-            redirect = true,
+--            redirect = true,
             sink = ltn12.sink.file(io.open(targetPath, "wb"))
         }
 
@@ -473,11 +473,11 @@ function API.downloadWebDAV(key, targetDir, targetPath)
     local headers = API.getWebDAVHeaders()
     local zipPath = targetDir .. "/" .. key .. ".zip"
     print("Fetching URL " .. url)
-    local r, c, h = http.request {
+    local r, c, h = https.request {
         method = "GET",
         url = url,
         headers = headers,
-        redirect = true,
+--        redirect = true,
         sink = ltn12.sink.file(io.open(zipPath, "wb"))
     }
 
