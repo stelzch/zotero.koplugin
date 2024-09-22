@@ -577,7 +577,7 @@ end
 
 function API.displaySearchResults(query)
     print("displaySearchResults for " .. query)
-    local queryRegex = ".*" .. string.gsub(query, " ", ".*") .. ".*"
+    local queryRegex = ".*" .. string.gsub(string.lower(query), " ", ".*") .. ".*"
     print("Searching for " .. queryRegex)
     -- Careful: linear search. Can be optimized quite a bit!
     local items = API.getItems()
@@ -596,7 +596,7 @@ function API.displaySearchResults(query)
                     name = name .. " - " .. parentItem.data.DOI
                 end
 
-                if string.match(name, queryRegex) then
+                if string.match(string.lower(name), queryRegex) then
                     table.insert(results, {
                         ["key"] = k,
                         ["text"] = name
