@@ -15,6 +15,7 @@ local Geom = require("ui/geometry")
 local _ = require("gettext")
 local ZoteroAPI = require("zoteroapi")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
+local BaseUtil = require("ffi/util")
 local lfs = require("libs/libkoreader-lfs")
 
 
@@ -102,7 +103,7 @@ function ZoteroBrowser:onMenuSelect(item)
                 UIManager:close(self.download_dialog)
                 local ReaderUI = require("apps/reader/readerui")
                 self.close_callback()
-                ReaderUI:showReader(full_path)
+                ReaderUI:showReader(BaseUtil.realpath(full_path))
             end
         end)
         UIManager:show(self.download_dialog)
