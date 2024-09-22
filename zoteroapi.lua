@@ -1,6 +1,6 @@
 local BaseUtil = require("ffi/util")
 local LuaSettings = require("luasettings")
-local http = require("socket.http")
+--local http = require("socket.http")
 local ltn12 = require("ltn12")
 local https = require("ssl.https")
 local JSON = require("json")
