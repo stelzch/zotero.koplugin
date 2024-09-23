@@ -21,7 +21,8 @@ local sha2 = require("ffi/sha2")
 local API = {}
 
 local SUPPORTED_MEDIA_TYPES = {
-    [1] = "application/pdf"
+    [1] = "application/pdf",
+--    [2] = "application/epub+zip"
 }
 
 local function joinTables(target, source)
