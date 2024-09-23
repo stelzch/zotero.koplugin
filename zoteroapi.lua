@@ -398,7 +398,8 @@ function API.getDirAndPath(attachmentKey)
         return nil, nil
     end
 
-    local targetDir = API.storage_dir .. "/" .. attachment.data.parentItem
+--    local targetDir = API.storage_dir .. "/" .. attachment.data.parentItem
+    local targetDir = API.storage_dir .. "/" .. attachmentKey
     local targetPath = targetDir .. "/" .. attachment.data.filename
 
     return targetDir, targetPath
@@ -489,13 +490,13 @@ function API.downloadWebDAV(key, targetDir, targetPath)
     local zip_cmd = "unzip -qq '" .. zipPath .. "' -d '" .. targetDir .. "'"
     print("Unzipping with " .. zip_cmd)
     local zip_result = os.execute(zip_cmd)
+    local remove_result = os.remove(zipPath)
+
     if zip_result then
         return targetPath
     else
         return nil, "Unzipping failed"
     end
-
-    local remove_result = os.remove(zipPath)
 end
 
 function API.getWebDAVHeaders()
@@ -541,31 +542,35 @@ function API.displayCollection(key)
 
     for k, item in pairs(items) do
         if item.data.itemType == "attachment"
-            and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType )
-            and item.data.parentItem ~= nil then
-            local parentItem = items[item.data.parentItem]
-            if parentItem ~= nil then
-				local displayItem = false
-				if key == nil then
-					-- We are dealing with the root collection here
-					if #parentItem.data.collections == 0 then 
-					-- this entry is not part of the collection and will be shown as part of the root collection
-						displayItem = true
-					end
-				elseif table_contains(parentItem.data.collections, key) then
-					-- this entry is not part of the collection specified by key
-					displayItem = true
-				end
-			
-				if displayItem then
-					local author = parentItem.meta.creatorSummary or "Unknown"
-					local name = author .. " - " .. parentItem.data.title
+            and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType ) then
+            local parentItem = nil
+            if item.data.parentItem ~= nil then
+                parentItem = items[item.data.parentItem]
+            end
+            if parentItem == nil then  -- parentless item or parent could not be found. 
+            -- Use the items metadata directly (cheap fix...; shoud do this more nicely)
+                parentItem = item
+            end
+            local displayItem = false
+            if key == nil then
+            -- We are dealing with the root collection here
+                if #parentItem.data.collections == 0 then 
+                -- this entry is not part of the collection and will be shown as part of the root collection
+                    displayItem = true
+                end
+            elseif table_contains(parentItem.data.collections, key) then
+            -- this entry is not part of the collection specified by key
+                displayItem = true
+            end
+        
+            if displayItem then
+                local author = parentItem.meta.creatorSummary or "Unknown"
+                local name = author .. " - " .. parentItem.data.title
 
-					table.insert(collectionItems, {
-						["key"] = k,
-						["text"] = name
-					})
-				end
+                table.insert(collectionItems, {
+                    ["key"] = k,
+                    ["text"] = name
+                })
 			end
 		end
     end
