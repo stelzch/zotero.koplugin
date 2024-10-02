@@ -352,8 +352,8 @@ function API.syncAllItems()
     print(e, api_key, user_id)
 
     local headers = API.getHeaders(api_key)
-    local items_url = ("https://api.zotero.org/users/%s/items?since=%s"):format(user_id, since)
-    local collections_url = ("https://api.zotero.org/users/%s/collections?since=%s"):format(user_id, since)
+    local items_url = ("https://api.zotero.org/users/%s/items?since=%s&includeTrashed=true"):format(user_id, since)
+    local collections_url = ("https://api.zotero.org/users/%s/collections?since=%s&includeTrashed=true"):format(user_id, since)
 
     -- Sync library items
     local items = API.getItems()
@@ -364,7 +364,14 @@ function API.syncAllItems()
             -- Ruthlessly update our local items
             local item = partial_entries[i]
             local key = item.key
-            items[key] = item
+
+            -- Check if item was deleted.
+            -- Server either sets deleted to true or 1, so we need to check for both
+            if item.data ~= nil and (item.data.deleted == 1 or item.data.deleted == true) then
+                items[key] = nil
+            else
+                items[key] = item
+            end
         end
     end)
     if e ~= nil then return e end
@@ -378,7 +385,11 @@ function API.syncAllItems()
             -- Ruthlessly update our local items
             local collection = partial_entries[i]
             local key = collection.key
-            collections[key] = collection
+            if collection.data ~= nil and (collection.data.deleted == 1 or collection.data.deleted == true) then
+                collections[key] = nil
+            else
+                collections[key] = collection
+            end
         end
     end)
     if e ~= nil then return e end
