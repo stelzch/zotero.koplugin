@@ -133,6 +133,11 @@ function API.setLibraryVersion(version)
     return API.settings:saveSetting("library_version_nr", version)
 end
 
+-- Retrieve underlying settings object to make changes from the outside
+function API.getSettings()
+    return API.settings
+end
+
 
 -- Check that a webdav connection works by performing a PROPFIND operation on the
 -- URL with the associated credentials.

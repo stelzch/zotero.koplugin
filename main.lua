@@ -4,7 +4,7 @@ local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local LuaSettings = require("frontend/luasettings")
+local SpinWidget = require("ui/widget/spinwidget")
 local DataStorage = require("datastorage")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Device = require("device")
@@ -18,6 +18,7 @@ local MultiInputDialog = require("ui/widget/multiinputdialog")
 local lfs = require("libs/libkoreader-lfs")
 
 
+local DEFAULT_LINES_PER_PAGE = 14
 
 local ZoteroBrowser = Menu:extend{
     no_title = false,
@@ -26,7 +27,7 @@ local ZoteroBrowser = Menu:extend{
     parent = nil,
     title_bar_left_icon = "appbar.search",
     covers_full_screen = true,
-    return_arrow_propagation = false
+    return_arrow_propagation = false,
 }
 
 
@@ -139,7 +140,6 @@ function Plugin:init()
     self.initialized = false
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
-    self.settings = LuaSettings:open(("%s/%s"):format(DataStorage:getSettingsDir(), "zotero_settings.lua"))
     xpcall(self.initAPIAndBrowser, self.initError, self)
     self.initialized = true
     print("Z: successfully initialized!")
@@ -173,7 +173,8 @@ function Plugin:initAPIAndBrowser()
         end,
         close_callback = function()
             UIManager:close(self.zotero_dialog)
-        end
+        end,
+		items_per_page = self:getItemsPerPage()
     }
     self.zotero_dialog = FrameContainer:new{
         padding = 0,
@@ -271,6 +272,13 @@ function Plugin:addToMainMenu(menu_items)
                                 icon = "notice-info"
                             })
                         end,
+                    },
+                    {
+                        text = _("Items per page"),
+                        callback = function()
+                            self:setItemsPerPage()
+                        end,
+
                     },
                 }
             }
@@ -375,7 +383,26 @@ function Plugin:setWebdavAccount()
     self.webdav_account_dialog:onShowKeyboard()
 end
 
+function Plugin:setItemsPerPage()
+    assert(ZoteroAPI.getSettings ~= nil)
+	print("setting to " .. self:getItemsPerPage())
+    self.items_per_page_dialog = SpinWidget:new {
+        title_text = _("Set items per page"),
+        value = self:getItemsPerPage(),
+		value_min = 1,
+		value_max = 1000,
+        callback = function(d)
+						ZoteroAPI.getSettings():saveSetting("items_per_page", d.value)
+						ZoteroAPI.getSettings():flush()
+						print("New lines per page :" .. d.value)
+                    end,
+    }
+	UIManager:show(self.items_per_page_dialog)
+end
 
+function Plugin:getItemsPerPage()
+    return ZoteroAPI.getSettings():readSetting("items_per_page", DEFAULT_LINES_PER_PAGE)
+end
 
 function Plugin:onZoteroOpenAction()
     if not self:checkInitialized() then
