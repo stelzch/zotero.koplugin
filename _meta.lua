@@ -1,4 +1,5 @@
 local _ = require("gettext")
+
 return {
     name = "Zotero",
     fullname = _("Zotero"),
