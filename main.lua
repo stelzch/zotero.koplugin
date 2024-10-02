@@ -84,6 +84,9 @@ function ZoteroBrowser:onMenuSelect(item)
     if item.collection ~= nil then
         table.insert(self.paths, item.key)
         self:displayCollection(item.key)
+    elseif item.wildcard_collection ~= nil then
+        table.insert(self.paths, "root")
+        self:displaySearchResults("")
     else
         self.download_dialog = InfoMessage:new{
             text = _("Downloading file"),
@@ -115,7 +118,16 @@ function ZoteroBrowser:displaySearchResults(query)
 end
 
 function ZoteroBrowser:displayCollection(collection_id)
-    self:setItems(ZoteroAPI.displayCollection(collection_id))
+    local items = ZoteroAPI.displayCollection(collection_id)
+
+    if collection_id == nil then
+        table.insert(items, 1, {
+            ["text"] = "All Items",
+            ["wildcard_collection"] = true
+        })
+    end
+
+    self:setItems(items)
 end
 
 function ZoteroBrowser:setItems(items)
