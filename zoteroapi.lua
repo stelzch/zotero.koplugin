@@ -403,7 +403,12 @@ function API.getDirAndPath(attachmentKey)
         return nil, nil
     end
 
-    local targetDir = API.storage_dir .. "/" .. attachment.data.parentItem
+    local targetDir = API.storage_dir .. "/"
+    if attachment.data.parentItem ~= nil then
+        targetDir = targetDir .. attachment.data.parentItem
+    else
+        targetDir = targetDir .. attachmentKey
+    end
     local targetPath = targetDir .. "/" .. attachment.data.filename
 
     return targetDir, targetPath
@@ -546,17 +551,30 @@ function API.displayCollection(key)
 
     for k, item in pairs(items) do
         if item.data.itemType == "attachment"
-            and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType )
-            and item.data.parentItem ~= nil then
-            local parentItem = items[item.data.parentItem]
-            if parentItem ~= nil and table_contains(parentItem.data.collections, key) then
-                local author = parentItem.meta.creatorSummary or "Unknown"
-                local name = author .. " - " .. parentItem.data.title
+            and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType ) then
 
-                table.insert(collectionItems, {
-                    ["key"] = k,
-                    ["text"] = name
-                })
+            if item.data.parentItem ~= nil then
+                -- if we have a parent item, check whether it belongs to the collection
+                -- we search for
+                local parentItem = items[item.data.parentItem]
+                if parentItem ~= nil and table_contains(parentItem.data.collections, key) then
+                    local author = parentItem.meta.creatorSummary or "Unknown"
+                    local name = author .. " - " .. parentItem.data.title
+
+                    table.insert(collectionItems, {
+                        ["key"] = k,
+                        ["text"] = name
+                    })
+                end
+            else
+                -- item does not have metadata header
+                if item.data.collections ~= nil
+                    and table_contains(item.data.collections, key) then
+                    table.insert(collectionItems, {
+                        ["key"] = k,
+                        ["text"] = item.data.title
+                    })
+                end
             end
         end
     end
