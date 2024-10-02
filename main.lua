@@ -425,7 +425,11 @@ function Plugin:setItemsPerPage()
         callback = function(d)
 						ZoteroAPI.getSettings():saveSetting("items_per_page", d.value)
 						ZoteroAPI.getSettings():flush()
-						print("New lines per page :" .. d.value)
+                        UIManager:show(InfoMessage:new{
+                            text = _("This change requires a restart of KOReader to take effect."),
+                            timeout = 3,
+                            icon = "notice"
+                        })
                     end,
     }
 	UIManager:show(self.items_per_page_dialog)
