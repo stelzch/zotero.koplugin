@@ -598,7 +598,7 @@ end
 
 function API.displaySearchResults(query)
     print("displaySearchResults for " .. query)
-    local queryRegex = ".*" .. string.gsub(query, " ", ".*") .. ".*"
+    local queryRegex = ".*" .. string.gsub(string.lower(query), " ", ".*") .. ".*"
     print("Searching for " .. queryRegex)
     -- Careful: linear search. Can be optimized quite a bit!
     local items = API.getItems()
@@ -606,22 +606,32 @@ function API.displaySearchResults(query)
 
     for k, item in pairs(items) do
         if item.data.itemType == "attachment"
-            and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType )
-            and item.data.parentItem ~= nil then
-            local parentItem = items[item.data.parentItem]
-            if parentItem ~= nil then
-                local author = parentItem.meta.creatorSummary or "Unknown"
-                local name = author .. " - " .. parentItem.data.title
+            and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType ) then
+            if item.data.parentItem ~= nil and items[item.data.parentItem] ~= nil then
+                local parentItem = items[item.data.parentItem]
+                if parentItem ~= nil then
+                    local author = parentItem.meta.creatorSummary or "Unknown"
+                    local name = author .. " - " .. parentItem.data.title
 
-                if parentItem.data.DOI ~= nil and parentItem.data.DOI ~= "" then
-                    name = name .. " - " .. parentItem.data.DOI
+                    if parentItem.data.DOI ~= nil and parentItem.data.DOI ~= "" then
+                        name = name .. " - " .. parentItem.data.DOI
+                    end
+
+                    if string.match(string.lower(name), queryRegex) then
+                        table.insert(results, {
+                            ["key"] = k,
+                            ["text"] = name
+                        })
+                    end
                 end
-
-                if string.match(name, queryRegex) then
-                    table.insert(results, {
-                        ["key"] = k,
-                        ["text"] = name
-                    })
+            elseif item.data ~= nil and item.data.title ~= nil then
+                -- item does not have metadata header, match against title directly
+                local title = item.data.title
+                if string.match(string.lower(title), queryRegex) then
+                        table.insert(results, {
+                            ["key"] = k,
+                            ["text"] = title
+                        })
                 end
             end
         end
@@ -665,6 +675,12 @@ end
 
 function API.syncModifiedItems()
     local modItems = API.getModifiedItems()
+end
+
+function API.resetSyncState()
+    API.setItems({})
+    API.setCollections({})
+    API.setLibraryVersion(0)
 end
 
 return API
