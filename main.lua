@@ -103,6 +103,7 @@ function ZoteroBrowser:onMenuSelect(item)
                 }
                 UIManager:show(b)
             else
+                print("Opening file path " .. full_path)
                 UIManager:close(self.download_dialog)
                 local ReaderUI = require("apps/reader/readerui")
                 self.close_callback()
@@ -143,8 +144,14 @@ function Plugin:onDispatcherRegisterActions()
     Dispatcher:registerAction("zotero_open_action", {
         category="none",
         event="ZoteroOpenAction",
-        title=_("Zotero"),
+        title=_("Zotero Open"),
         general=true,
+    })
+    Dispatcher:registerAction("zotero_sync_action", {
+        category="none",
+        event="ZoteroSyncAction",
+        title=_("Zotero Sync"),
+        general=true
     })
 end
 
@@ -212,34 +219,24 @@ function Plugin:addToMainMenu(menu_items)
             {
                 text = _("Synchronize"),
                 callback = function()
-                    if not self:checkInitialized() then
-                        return
-                    end
-                    UIManager:scheduleIn(1, function()
-                        local e = ZoteroAPI.syncAllItems()
-
-                        if e == nil then
-                            UIManager:show(InfoMessage:new{
-                                text = _("Success."),
-                                timeout = 3,
-                                icon = "check"
-                            })
-                        else
-                            UIManager:show(InfoMessage:new{
-                                text = e,
-                                timeout = 3,
-                                icon = "notice-warning"
-                            })
-                        end
-                    end)
-
-                    UIManager:show(InfoMessage:new{
-                        text = _("Synchronizing Zotero library. This might take some time."),
-                        timeout = 3,
-                        icon = "notice-info"
-                    })
+                    self:onZoteroSyncAction()
                 end,
 
+            },
+            {
+                text = _("Maintenance"),
+                callback = function()
+                    return nil
+                end,
+                sub_item_table = {
+                    {
+                        text = _("Resync entire collection"),
+                        callback = function()
+                            ZoteroAPI.resetSyncState()
+                            self:onZoteroSyncAction()
+                        end,
+                    },
+                },
             },
             {
                 text = _("Settings"),
@@ -427,6 +424,36 @@ function Plugin:onZoteroOpenAction()
         h = Screen:getHeight()
     })
     self.browser:displayCollection(nil)
+end
+
+function Plugin:onZoteroSyncAction()
+    if not self:checkInitialized() then
+        return
+    end
+    UIManager:scheduleIn(1, function()
+        local e = ZoteroAPI.syncAllItems()
+
+        if e == nil then
+            UIManager:show(InfoMessage:new{
+                text = _("Success."),
+                timeout = 3,
+                icon = "check"
+            })
+        else
+            UIManager:show(InfoMessage:new{
+                text = e,
+                timeout = 3,
+                icon = "notice-warning"
+            })
+        end
+    end)
+
+    UIManager:show(InfoMessage:new{
+        text = _("Synchronizing Zotero library. This might take some time."),
+        timeout = 3,
+        icon = "notice-info"
+    })
+
 end
 
 return Plugin
