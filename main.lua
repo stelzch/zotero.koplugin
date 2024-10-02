@@ -129,7 +129,7 @@ local Plugin = WidgetContainer:new{
 function Plugin:onDispatcherRegisterActions()
     Dispatcher:registerAction("zotero_open_action", {
         category="none",
-        event="Zotero",
+        event="ZoteroOpenAction",
         title=_("Zotero"),
         general=true,
     })
@@ -193,16 +193,7 @@ function Plugin:addToMainMenu(menu_items)
             {
                 text = _("Browse"),
                 callback = function()
-                    if not self:checkInitialized() then
-                        return
-                    end
-
-                    self.browser:init()
-                    UIManager:show(self.zotero_dialog, "full", Geom:new{
-                        w = Screen:getWidth(),
-                        h = Screen:getHeight()
-                    })
-                    self.browser:displayCollection(nil)
+                    self:onZoteroOpenAction()
                 end,
             },
             {
@@ -386,8 +377,17 @@ end
 
 
 
-function Plugin:onZotero()
+function Plugin:onZoteroOpenAction()
+    if not self:checkInitialized() then
+        return
+    end
 
+    self.browser:init()
+    UIManager:show(self.zotero_dialog, "full", Geom:new{
+        w = Screen:getWidth(),
+        h = Screen:getHeight()
+    })
+    self.browser:displayCollection(nil)
 end
 
 return Plugin
