@@ -20,6 +20,12 @@ local lfs = require("libs/libkoreader-lfs")
 
 local DEFAULT_LINES_PER_PAGE = 14
 
+local table_empty = function(table)
+    -- see https://stackoverflow.com/a/1252776
+    local next = next
+    return (next(table) == nil)
+end
+
 local ZoteroBrowser = Menu:extend{
     no_title = false,
     is_borderless = true,
@@ -38,6 +44,7 @@ end
 
 -- Show search input
 function ZoteroBrowser:onLeftButtonTap()
+    table.insert(self.paths, "search")
     local search_query_dialog
     search_query_dialog = InputDialog:new{
         title = _("Search Zotero titles"),
@@ -87,6 +94,8 @@ function ZoteroBrowser:onMenuSelect(item)
     elseif item.wildcard_collection ~= nil then
         table.insert(self.paths, "root")
         self:displaySearchResults("")
+    elseif item.is_label ~= nil then
+        -- nop
     else
         self.download_dialog = InfoMessage:new{
             text = _("Downloading file"),
@@ -103,7 +112,6 @@ function ZoteroBrowser:onMenuSelect(item)
                 }
                 UIManager:show(b)
             else
-                print("Opening file path " .. full_path)
                 UIManager:close(self.download_dialog)
                 local ReaderUI = require("apps/reader/readerui")
                 self.close_callback()
@@ -115,7 +123,14 @@ function ZoteroBrowser:onMenuSelect(item)
 end
 
 function ZoteroBrowser:displaySearchResults(query)
-    self:setItems(ZoteroAPI.displaySearchResults(query))
+    local items = ZoteroAPI.displaySearchResults(query)
+    if table_empty(items) then
+        table.insert(items, 1, {
+            ["text"] = _("No Results"),
+            ["is_label"] = true,
+        })
+    end
+    self:setItems(items)
 end
 
 function ZoteroBrowser:displayCollection(collection_id)
@@ -123,8 +138,15 @@ function ZoteroBrowser:displayCollection(collection_id)
 
     if collection_id == nil then
         table.insert(items, 1, {
-            ["text"] = "All Items",
+            ["text"] = _("All Items"),
             ["wildcard_collection"] = true
+        })
+    end
+
+    if table_empty(items) then
+        table.insert(items, 1, {
+            ["text"] = _("No Items"),
+            ["is_label"] = true,
         })
     end
 
