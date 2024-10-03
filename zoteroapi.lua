@@ -7,13 +7,15 @@ local JSON = require("json")
 local lfs = require("libs/libkoreader-lfs")
 local DocSettings = require("docsettings")
 local sha2 = require("ffi/sha2")
+local SQ3 = require("lua-ljsqlite3/init")
+local ffi = require("ffi")
 
 -- Functions expect config parameter, a lua table with the following keys:
 -- zotero_dir: Path to a directory where cache files will be stored
 -- api_key: self-explanatory
 --
 -- Directory layout of zoteroapi
--- /items.json: Contains all items
+-- /zotero.db: SQLite3 database that contains JSON items & collections
 -- /storage/<KEY>/filename.pdf: Actual PDF files
 -- /storage/<KEY>/version: Version number of downloaded attachment
 -- /meta.lua: Metadata containing library version, items etc.
@@ -22,12 +24,105 @@ local API = {}
 
 local SUPPORTED_MEDIA_TYPES = {
     [1] = "application/pdf",
-    [2] = "application/epub+zip"
+    [2] = "application/epub+zip",
+    [3] = "text/html"
 }
 
-local function joinTables(target, source)
-    return table.move(source, 1, #source, #target + 1, target)
-end
+local ZOTERO_DB_SCHEMA = [[
+CREATE TABLE IF NOT EXISTS items (
+    key TEXT PRIMARY KEY,
+    value BLOB
+);
+CREATE TABLE IF NOT EXISTS collections (
+    key TEXT PRIMARY KEY,
+    value BLOB
+);
+]]
+local ZOTERO_DB_UPDATE_ITEM = [[
+INSERT INTO items(key, value) VALUES(?,jsonb(?)) ON CONFLICT DO UPDATE SET value = excluded.value;
+]]
+
+local ZOTERO_DB_UPDATE_COLLECTION = [[
+INSERT INTO collections(key, value) VALUES(?,jsonb(?)) ON CONFLICT DO UPDATE SET value = excluded.value;
+]]
+
+local ZOTERO_DB_DELETE = [[
+DELETE FROM items;
+DELETE FROM collections;
+PRAGMA user_version = 0;
+]]
+
+local ZOTERO_GET_DB_VERSION = [[ PRAGMA user_version; ]]
+
+local ZOTERO_GET_ITEM = [[ SELECT json(items.value) FROM items WHERE key = ?; ]]
+
+local ZOTERO_QUERY_ITEMS = [[
+SELECT key, name, type FROM (SELECT
+    key,
+    jsonb_extract(value, '$.data.name') || '/' AS name,
+    jsonb_extract(value, '$.data.parentCollection') AS parent_key,
+    'collection' AS type
+FROM collections
+WHERE (jsonb_extract(value, '$.data.deleted') IS NOT 1) AND ((?1 IS NULL AND parent_key = false) OR (?1 IS NOT NULL AND parent_key = ?1))
+ORDER BY name)
+UNION ALL
+SELECT key, name || title AS name, type FROM (
+SELECT
+    key,
+    jsonb_extract(value, '$.data.title') AS title,
+    -- if possible, prepend creator summary
+    coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') AS name,
+    iif(jsonb_extract(value, '$.data.itemType') = 'attachment', 'attachment', 'item') AS type
+FROM items
+WHERE
+-- don't display items in root collection
+?1 IS NOT NULL
+-- the item should not be deleted
+AND (jsonb_extract(value, '$.data.deleted') IS NOT 1)
+-- the item must belong to the collection we query
+AND (?1 IN (SELECT value FROM json_each(jsonb_extract(items.value, '$.data.collections'))))
+-- and it must either be an attachment or have at least one attachment
+AND (jsonb_extract(value, '$.data.itemType') = 'attachment'
+     OR (SELECT COUNT(key) FROM items AS child
+            WHERE jsonb_extract(child.value, '$.data.parentItem') = items.key
+                  AND jsonb_extract(child.value, '$.data.itemType') = 'attachment'
+                  AND jsonb_extract(child.value, '$.data.deleted') IS NOT 1) > 0)
+ORDER BY title);
+]]
+
+local ZOTERO_SEARCH_ITEMS = [[
+SELECT
+    key,
+    jsonb_extract(value, '$.data.title') AS title,
+    -- if possible, prepend creator summary
+    coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') AS name,
+    iif(jsonb_extract(value, '$.data.itemType') = 'attachment', 'attachment', 'item') AS type
+FROM items
+WHERE
+-- the item should not be deleted
+(jsonb_extract(value, '$.data.deleted') IS NOT 1)
+-- and it must either be an attachment or have at least one attachment
+AND (jsonb_extract(value, '$.data.itemType') = 'attachment'
+     OR (SELECT COUNT(key) FROM items AS child
+            WHERE jsonb_extract(child.value, '$.data.parentItem') = items.key
+                  AND jsonb_extract(child.value, '$.data.itemType') = 'attachment'
+                  AND jsonb_extract(child.value, '$.data.deleted') IS NOT 1) > 0)
+AND title LIKE ?1
+ORDER BY title;
+]]
+
+local ZOTERO_GET_ATTACHMENTS = [[
+SELECT
+key,
+jsonb_extract(value, '$.data.filename') AS filename,
+(jsonb_extract(value, '$.data.contentType') = 'application/pdf') AS is_pdf
+FROM items
+WHERE
+jsonb_extract(value, '$.data.itemType') = 'attachment' AND
+jsonb_extract(value, '$.data.deleted') IS NOT 1 AND
+((key = ?1) OR (jsonb_extract(value, '$.data.parentItem') = ?1))
+ORDER BY is_pdf DESC, filename ASC;
+]]
 
 local function file_exists(path)
     if path == nil then return nil end
@@ -64,11 +159,17 @@ function API.cutDecimalPlaces(x, num_places)
     return math.floor(x * fac) / fac
 end
 
+function API.openDB()
+    local db_path = BaseUtil.joinPath(API.zotero_dir, "zotero.db")
+    local db = SQ3.open(db_path)
+
+    return db
+end
+
 function API.init(zotero_dir)
     print("Z: initializing API")
     API.zotero_dir = zotero_dir
     local settings_path = BaseUtil.joinPath(API.zotero_dir, "meta.lua")
-    print(settings_path)
     API.settings = LuaSettings:open(settings_path)
     print("Z: settings opened")
 
@@ -78,6 +179,10 @@ function API.init(zotero_dir)
     end
 
     print("Z: storage dir" .. API.storage_dir)
+
+    local db = API.openDB()
+    db:exec(ZOTERO_DB_SCHEMA)
+    db:close()
 end
 
 function API.getAPIKey()
@@ -127,11 +232,22 @@ function API.setWebDAVUrl(url)
 end
 
 function API.getLibraryVersion()
-    return API.settings:readSetting("library_version_nr", "0")
+    local db = API.openDB()
+
+    local result, ncol = db:exec(ZOTERO_GET_DB_VERSION)
+    assert(ncol == 1)
+    local version = tonumber(result[1][1])
+    db:close()
+
+    return version
 end
 
 function API.setLibraryVersion(version)
-    return API.settings:saveSetting("library_version_nr", version)
+    local v = tonumber(version)
+    local db = API.openDB()
+    local sql = "PRAGMA user_version = " .. tostring(v) .. ";"
+    db:exec(sql)
+    db:close()
 end
 
 -- Retrieve underlying settings object to make changes from the outside
@@ -184,60 +300,6 @@ function API.saveModifiedItems()
     API.settings:flush()
 end
 
-function API.getFilterTag()
-    return API.settings:readSetting("filter_tag", "")
-end
-
-function API.setFilterTag(tag)
-    return API.settings:saveSetting("filter_tag", tag)
-end
-
-function API.setItems(items)
-    API.items = items
-    local f = assert(io.open(BaseUtil.joinPath(API.zotero_dir, "items.json"), "w"))
-    local content = JSON.encode(API.items)
-    f:write(content)
-    f:close()
-end
-
-function API.getItems()
-    if API.items == nil then
-        local path = BaseUtil.joinPath(API.zotero_dir, "items.json")
-        local file_exists = lfs.attributes(path)
-
-        if not file_exists then
-            API.items = {}
-        else
-            API.items = JSON.decode(file_slurp(path))
-        end
-    end
-
-    return API.items
-end
-
-function API.getCollections()
-    if API.collections == nil then
-        local path = BaseUtil.joinPath(API.zotero_dir, "collections.json")
-        local file_exists = lfs.attributes(path)
-
-        if not file_exists then
-            API.collections = {}
-        else
-            API.collections = JSON.decode(file_slurp(path))
-        end
-    end
-
-    return API.collections
-end
-
-function API.setCollections(collections)
-    API.collections = collections
-    local f = assert(io.open(BaseUtil.joinPath(API.zotero_dir, "collections.json"), "w"))
-    local content = JSON.encode(API.collections)
-    f:write(content)
-    f:close()
-end
-
 function API.verifyResponse(r, c)
     if r ~= 1 then
         return ("Error: " .. c)
@@ -249,7 +311,7 @@ function API.verifyResponse(r, c)
 end
 
 function API.fetchCollectionSize(collection_url, headers)
-    print("Determining size of '" .. collection_url .. "'")
+    print("Z: Determining size of '" .. collection_url .. "'")
     local r, c, h = http.request {
         method = "HEAD",
         url = collection_url,
@@ -345,6 +407,9 @@ function API.getHeaders(api_key)
 end
 
 function API.syncAllItems()
+    local db = API.openDB()
+    local stmt_update_item = db:prepare(ZOTERO_DB_UPDATE_ITEM)
+    local stmt_update_collection = db:prepare(ZOTERO_DB_UPDATE_COLLECTION)
     local since = API.getLibraryVersion()
 
     local e, api_key, user_id = API.ensureKeyAndID()
@@ -356,74 +421,91 @@ function API.syncAllItems()
     local collections_url = ("https://api.zotero.org/users/%s/collections?since=%s&includeTrashed=true"):format(user_id, since)
 
     -- Sync library items
-    local items = API.getItems()
-    print("loaded items: " .. #items)
-    local r, e = API.fetchCollectionPaginated(items_url, headers, function(partial_entries)
+    local r, e
+    r, e = API.fetchCollectionPaginated(items_url, headers, function(partial_entries)
         print("Received callback, processing entries: " .. #partial_entries)
         for i = 1, #partial_entries do
             -- Ruthlessly update our local items
             local item = partial_entries[i]
             local key = item.key
 
-            -- Check if item was deleted.
-            -- Server either sets deleted to true or 1, so we need to check for both
-            if item.data ~= nil and (item.data.deleted == 1 or item.data.deleted == true) then
-                items[key] = nil
-            else
-                items[key] = item
-            end
+            stmt_update_item:reset():bind(key, JSON.encode(item)):step()
         end
     end)
     if e ~= nil then return e end
-    API.setItems(items)
 
-    -- Sync library collections
-    local collections = API.getCollections()
-    local r, e = API.fetchCollectionPaginated(collections_url, headers, function(partial_entries)
+ -- Sync library collections
+    r, e = API.fetchCollectionPaginated(collections_url, headers, function(partial_entries)
         print("Received callback, processing entries: " .. #partial_entries)
         for i = 1, #partial_entries do
             -- Ruthlessly update our local items
             local collection = partial_entries[i]
             local key = collection.key
-            if collection.data ~= nil and (collection.data.deleted == 1 or collection.data.deleted == true) then
-                collections[key] = nil
-            else
-                collections[key] = collection
-            end
+
+            stmt_update_collection:reset():bind(key, JSON.encode(collection)):step()
         end
     end)
     if e ~= nil then return e end
-    API.setCollections(collections)
 
     API.setLibraryVersion(r)
     API.settings:flush()
+    db:close()
 
     return nil
 end
 
--- If a tag is set, ensure all entries actually have that tag and it has not been removed
--- If no tag is set, just remove all deleted entries from the library
-function API.purgeEntries()
-
+function API.getDirAndPath(item)
+    if item == nil then
+        return nil, nil
+    else
+        local dir = BaseUtil.joinPath(API.storage_dir, item.key)
+        local file = BaseUtil.joinPath(dir, item.data.filename)
+        return dir, file
+    end
 end
 
-function API.getDirAndPath(attachmentKey)
-    local items = API.getItems()
-    local attachment = items[attachmentKey]
+function API.getItem(key)
+    local db = API.openDB()
+    local stmt = db:prepare(ZOTERO_GET_ITEM)
+    stmt:reset():bind1(1,key)
 
-    if attachment == nil then
-        return nil, nil
-    end
+    local result, nr = stmt:resultset()
+    stmt:close()
+    db:close()
 
-    local targetDir = API.storage_dir .. "/"
-    if attachment.data.parentItem ~= nil then
-        targetDir = targetDir .. attachment.data.parentItem
+    if nr == 0 then
+        return nil
     else
-        targetDir = targetDir .. attachmentKey
+        return JSON.decode(result[1][1])
     end
-    local targetPath = targetDir .. "/" .. attachment.data.filename
+end
 
-    return targetDir, targetPath
+function API.getItemAttachments(key)
+    local db = API.openDB()
+    local stmt = db:prepare(ZOTERO_GET_ATTACHMENTS)
+    stmt:reset()
+    stmt:bind1(1, key)
+
+    local result, nr = stmt:resultset()
+
+    stmt:close()
+    db:close()
+
+    if nr == 0 then
+        return nil
+    end
+
+    local items = {}
+
+    for i=1,nr do
+        table.insert(items, {
+            ["key"] = result[1][i],
+            ["text"] = result[2][i],
+            ["type"] = 'attachment',
+        })
+    end
+
+    return items
 end
 
 -- Downloads an attachment file to the correct directory and returns the path.
@@ -434,24 +516,25 @@ function API.downloadAndGetPath(key, download_callback)
     local e, api_key, user_id = API.ensureKeyAndID()
     if e ~= nil then return nil, e end
 
-    local items = API.getItems()
-    if items[key] == nil then
+    local item = API.getItem(key)
+    if item == nil then
         return nil, "Error: the requested file can not be found in the database"
     end
-    local item = items[key]
 
     if item.data.itemType ~= "attachment" then
         return nil, "Error: this item is not an attachment"
+    elseif item.data.linkMode ~= "imported_file" then
+        return nil, "Error: this item is not a stored attachment"
+    elseif table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType) == false then
+        return nil, "Error: this item has an unsupported content type (" .. item.data.contentType .. ")"
     end
 
-    local attachment = item
-
-    local targetDir, targetPath = API.getDirAndPath(key)
+    local targetDir, targetPath = API.getDirAndPath(item)
     lfs.mkdir(targetDir)
 
     local local_version = tonumber(file_slurp(targetDir .. "/version"))
 
-    if local_version ~= nil and local_version >= attachment.version and file_exists(targetPath) then
+    if local_version ~= nil and local_version >= item.version and file_exists(targetPath) then
         return targetPath, nil -- all done, local file is up to date
     end
 
@@ -481,7 +564,7 @@ function API.downloadAndGetPath(key, download_callback)
     if versionFile == nil then
         return nil, "Could not write version file"
     end
-    versionFile:write(tostring(attachment.version))
+    versionFile:write(tostring(item.version))
     versionFile:close()
 
     return targetPath, nil
@@ -536,108 +619,62 @@ end
 -- Collections will have a display name that ends with a slash and contain true
 -- under the key "collection" in their table.
 function API.displayCollection(key)
+    local db = API.openDB()
+    local stmt = db:prepare(ZOTERO_QUERY_ITEMS)
+
+    stmt:reset()
+    stmt:clearbind()
+
+    if key ~= nil then
+        stmt:bind1(1, key)
+    end
+
     local result = {}
+    local row, _ = stmt:step({}, {})
+    while row ~= nil do
+        table.insert(result, {
+            ["key"] = row[1],
+            ["text"] = row[2],
+            ["type"] = row[3],
+        })
 
-    -- Get list of collections
-    local collections = API.getCollections()
-    for k, collection in pairs(collections) do
-        if (key == nil and collection.data.parentCollection == false) or
-            (key ~= nil and collection.data.parentCollection == key) then
-            table.insert(result, {
-                ["key"] = k,
-                ["text"] = collection.data.name .. "/",
-                ["collection"] = true
-            })
-        end
+        print(tostring(row[2]) .. " type = " .. (row[3] or 'nil'))
+
+        row = stmt:step(row)
     end
-    -- Sort collections by name
-    local comparator = function(a,b)
-        return (a["text"] < b["text"])
-    end
-    table.sort(result, comparator)
+    stmt:close()
+    db:close()
 
-    -- Get list of items
-    -- Careful: linear search. Can be optimized quite a bit!
-    local items = API.getItems()
-    local collectionItems = {}
-
-    for k, item in pairs(items) do
-        if item.data.itemType == "attachment"
-            and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType ) then
-
-            if item.data.parentItem ~= nil then
-                -- if we have a parent item, check whether it belongs to the collection
-                -- we search for
-                local parentItem = items[item.data.parentItem]
-                if parentItem ~= nil and table_contains(parentItem.data.collections, key) then
-                    local author = parentItem.meta.creatorSummary or "Unknown"
-                    local name = author .. " - " .. parentItem.data.title
-
-                    table.insert(collectionItems, {
-                        ["key"] = k,
-                        ["text"] = name
-                    })
-                end
-            else
-                -- item does not have metadata header
-                if item.data.collections ~= nil
-                    and table_contains(item.data.collections, key) then
-                    table.insert(collectionItems, {
-                        ["key"] = k,
-                        ["text"] = item.data.title
-                    })
-                end
-            end
-        end
-    end
-    table.sort(collectionItems, comparator)
-
-    -- Join collections and items together and return it
-    return joinTables(result, collectionItems)
+    return result
 end
 
 function API.displaySearchResults(query)
-    print("displaySearchResults for " .. query)
-    local queryRegex = ".*" .. string.gsub(string.lower(query), " ", ".*") .. ".*"
-    print("Searching for " .. queryRegex)
-    -- Careful: linear search. Can be optimized quite a bit!
-    local items = API.getItems()
-    local results = {}
+    local queryExpr = "%" .. string.gsub(query, " ", "%") .. "%"
+    local db = API.openDB()
+    local stmt = db:prepare(ZOTERO_SEARCH_ITEMS)
 
-    for k, item in pairs(items) do
-        if item.data.itemType == "attachment"
-            and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType ) then
-            if item.data.parentItem ~= nil and items[item.data.parentItem] ~= nil then
-                local parentItem = items[item.data.parentItem]
-                if parentItem ~= nil then
-                    local author = parentItem.meta.creatorSummary or "Unknown"
-                    local name = author .. " - " .. parentItem.data.title
+    stmt:reset()
+    stmt:clearbind()
 
-                    if parentItem.data.DOI ~= nil and parentItem.data.DOI ~= "" then
-                        name = name .. " - " .. parentItem.data.DOI
-                    end
+    stmt:bind1(1, queryExpr)
 
-                    if string.match(string.lower(name), queryRegex) then
-                        table.insert(results, {
-                            ["key"] = k,
-                            ["text"] = name
-                        })
-                    end
-                end
-            elseif item.data ~= nil and item.data.title ~= nil then
-                -- item does not have metadata header, match against title directly
-                local title = item.data.title
-                if string.match(string.lower(title), queryRegex) then
-                        table.insert(results, {
-                            ["key"] = k,
-                            ["text"] = title
-                        })
-                end
-            end
-        end
+    local result = {}
+    local row, _ = stmt:step({}, {})
+    while row ~= nil do
+        table.insert(result, {
+            ["key"] = row[1],
+            ["text"] = row[2],
+            ["type"] = row[3],
+        })
+
+        print(tostring(row[2]) .. " type = " .. (row[3] or 'nil'))
+
+        row = stmt:step(row)
     end
+    stmt:close()
+    db:close()
 
-    return results
+    return result
 end
 
 
@@ -678,9 +715,9 @@ function API.syncModifiedItems()
 end
 
 function API.resetSyncState()
-    API.setItems({})
-    API.setCollections({})
-    API.setLibraryVersion(0)
+    local db = API.openDB()
+    db:exec(ZOTERO_DB_DELETE)
+    db:close()
 end
 
 return API

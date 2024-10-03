@@ -50,7 +50,7 @@ function ZoteroBrowser:onLeftButtonTap()
         title = _("Search Zotero titles"),
         input = "",
         input_hint = "search query",
-        description = _("This will search title, first author and DOI of all entries."),
+        description = _("This will search title and first author of all entries."),
         buttons = {
             {
                 {
@@ -87,38 +87,55 @@ function ZoteroBrowser:onReturn()
 end
 
 
+function ZoteroBrowser:openAttachment(key)
+    local full_path, e = ZoteroAPI.downloadAndGetPath(key)
+    if e ~= nil then
+        local b = InfoMessage:new{
+            text = _("Could not open file.") .. e,
+            timeout = 5,
+            icon = "notice-warning"
+        }
+        UIManager:show(b)
+    else
+        UIManager:close(self.download_dialog)
+        local ReaderUI = require("apps/reader/readerui")
+        self.close_callback()
+        ReaderUI:showReader(full_path)
+    end
+end
+
 function ZoteroBrowser:onMenuSelect(item)
-    if item.collection ~= nil then
+    if item.type == "collection" then
         table.insert(self.paths, item.key)
         self:displayCollection(item.key)
-    elseif item.wildcard_collection ~= nil then
+    elseif item.type == "wildcard_collection"  then
         table.insert(self.paths, "root")
         self:displaySearchResults("")
-    elseif item.is_label ~= nil then
-        -- nop
-    else
+    elseif item.type == "item" then
         self.download_dialog = InfoMessage:new{
             text = _("Downloading file"),
             timeout = 5,
             icon = "notice-info",
         }
         UIManager:scheduleIn(0.05, function()
-            local full_path, e = ZoteroAPI.downloadAndGetPath(item.key)
-            if e ~= nil then
+            local attachments = ZoteroAPI.getItemAttachments(item.key)
+            if attachments == nil or table_empty(attachments)  then
                 local b = InfoMessage:new{
-                    text = _("Could not open file.") .. e,
+                    text = _("The selected entry does not have any attachments."),
                     timeout = 5,
                     icon = "notice-warning"
                 }
                 UIManager:show(b)
+                return
             else
-                UIManager:close(self.download_dialog)
-                local ReaderUI = require("apps/reader/readerui")
-                self.close_callback()
-                ReaderUI:showReader(full_path)
+                self:openAttachment(attachments[1].key)
             end
         end)
         UIManager:show(self.download_dialog)
+    elseif item.type == "attachment" then
+        self:openAttachment(item.key)
+    elseif item.type == "label" then
+        -- nop
     end
 end
 
@@ -139,14 +156,14 @@ function ZoteroBrowser:displayCollection(collection_id)
     if collection_id == nil then
         table.insert(items, 1, {
             ["text"] = _("All Items"),
-            ["wildcard_collection"] = true
+            ["type"] = "wildcard_collection"
         })
     end
 
     if table_empty(items) then
         table.insert(items, 1, {
             ["text"] = _("No Items"),
-            ["is_label"] = true,
+            ["type"] = "label",
         })
     end
 
@@ -183,6 +200,7 @@ function Plugin:init()
     self.ui.menu:registerToMainMenu(self)
     xpcall(self.initAPIAndBrowser, self.initError, self)
     self.initialized = true
+
     print("Z: successfully initialized!")
 end
 
