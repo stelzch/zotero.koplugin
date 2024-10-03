@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS collections (
     key TEXT PRIMARY KEY,
     value BLOB
 );
+CREATE TABLE IF NOT EXISTS offline_collections(
+    key TEXT PRIMARY KEY
+);
 ]]
 local ZOTERO_DB_UPDATE_ITEM = [[
 INSERT INTO items(key, value) VALUES(?,jsonb(?)) ON CONFLICT DO UPDATE SET value = excluded.value;
@@ -335,6 +338,7 @@ end
 --
 -- If a callback is given, it will be called with the entries on each page as they are fetched
 -- and the function will return the version number.
+-- The second parameter to callback is the percentage of completion
 --
 -- If an error occurs, the function will return nil and the error message as second parameter.
 function API.fetchCollectionPaginated(collection_url, headers, callback)
@@ -370,8 +374,13 @@ function API.fetchCollectionPaginated(collection_url, headers, callback)
             return nil, "Error: failed to parse JSON in response"
         end
 
+        local percentage = 100 * item_nr / collection_size
+        if collection_size == 0 then
+            percentage = 100
+        end
+
         if callback then
-            callback(result)
+            callback(result, percentage)
         else
             -- add items to the list we return in the end
             table.move(result, 1, #result, #items + 1, items)
@@ -406,7 +415,8 @@ function API.getHeaders(api_key)
     }
 end
 
-function API.syncAllItems()
+function API.syncAllItems(progress_callback)
+    local callback = progress_callback or function() end
     local db = API.openDB()
     local stmt_update_item = db:prepare(ZOTERO_DB_UPDATE_ITEM)
     local stmt_update_collection = db:prepare(ZOTERO_DB_UPDATE_COLLECTION)
@@ -420,10 +430,25 @@ function API.syncAllItems()
     local items_url = ("https://api.zotero.org/users/%s/items?since=%s&includeTrashed=true"):format(user_id, since)
     local collections_url = ("https://api.zotero.org/users/%s/collections?since=%s&includeTrashed=true"):format(user_id, since)
 
+    -- Sync library collections
+    r, e = API.fetchCollectionPaginated(collections_url, headers, function(partial_entries, percentage)
+        print("Received callback, processing entries: " .. #partial_entries)
+        callback(string.format("Syncing collections %.0f%%", percentage))
+        for i = 1, #partial_entries do
+            -- Ruthlessly update our local items
+            local collection = partial_entries[i]
+            local key = collection.key
+
+            stmt_update_collection:reset():bind(key, JSON.encode(collection)):step()
+        end
+    end)
+    if e ~= nil then return e end
+
     -- Sync library items
     local r, e
-    r, e = API.fetchCollectionPaginated(items_url, headers, function(partial_entries)
+    r, e = API.fetchCollectionPaginated(items_url, headers, function(partial_entries, percentage)
         print("Received callback, processing entries: " .. #partial_entries)
+        callback(string.format("Syncing items %.0f%%", percentage))
         for i = 1, #partial_entries do
             -- Ruthlessly update our local items
             local item = partial_entries[i]
@@ -434,18 +459,6 @@ function API.syncAllItems()
     end)
     if e ~= nil then return e end
 
- -- Sync library collections
-    r, e = API.fetchCollectionPaginated(collections_url, headers, function(partial_entries)
-        print("Received callback, processing entries: " .. #partial_entries)
-        for i = 1, #partial_entries do
-            -- Ruthlessly update our local items
-            local collection = partial_entries[i]
-            local key = collection.key
-
-            stmt_update_collection:reset():bind(key, JSON.encode(collection)):step()
-        end
-    end)
-    if e ~= nil then return e end
 
     API.setLibraryVersion(r)
     API.settings:flush()

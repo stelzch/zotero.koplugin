@@ -490,30 +490,21 @@ function Plugin:onZoteroSyncAction()
     if not self:checkInitialized() then
         return
     end
-    UIManager:scheduleIn(1, function()
-        local e = ZoteroAPI.syncAllItems()
+    local Trapper = require("frontend/ui/trapper")
+    Trapper:wrap(function()
+        Trapper:info("Synchronizing Zotero library.")
+        local e = ZoteroAPI.syncAllItems(function(msg)
+            Trapper:info(msg)
+        end)
+
 
         if e == nil then
-            UIManager:show(InfoMessage:new{
-                text = _("Success."),
-                timeout = 3,
-                icon = "check"
-            })
+            Trapper:info("Success")
         else
-            UIManager:show(InfoMessage:new{
-                text = e,
-                timeout = 3,
-                icon = "notice-warning"
-            })
+            Trapper:info(e)
         end
+
     end)
-
-    UIManager:show(InfoMessage:new{
-        text = _("Synchronizing Zotero library. This might take some time."),
-        timeout = 3,
-        icon = "notice-info"
-    })
-
 end
 
 return Plugin
