@@ -523,7 +523,7 @@ function API.downloadAndGetPath(key, download_callback)
 
     if item.data.itemType ~= "attachment" then
         return nil, "Error: this item is not an attachment"
-    elseif item.data.linkMode ~= "imported_file" then
+    elseif item.data.linkMode ~= "imported_file" and item.data.linkMode ~= "imported_url" then
         return nil, "Error: this item is not a stored attachment"
     elseif table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType) == false then
         return nil, "Error: this item has an unsupported content type (" .. item.data.contentType .. ")"

@@ -89,7 +89,7 @@ end
 
 function ZoteroBrowser:openAttachment(key)
     local full_path, e = ZoteroAPI.downloadAndGetPath(key)
-    if e ~= nil then
+    if e ~= nil or full_path == nil then
         local b = InfoMessage:new{
             text = _("Could not open file.") .. e,
             timeout = 5,
@@ -97,6 +97,7 @@ function ZoteroBrowser:openAttachment(key)
         }
         UIManager:show(b)
     else
+        assert(full_path ~= nil)
         UIManager:close(self.download_dialog)
         local ReaderUI = require("apps/reader/readerui")
         self.close_callback()
@@ -139,14 +140,16 @@ function ZoteroBrowser:onMenuSelect(item)
     end
 end
 
+function ZoteroBrowser:onMenuHold(item)
+    if item.type == "item" then
+        table.insert(self.paths, item.key)
+        self:displayAttachments(item.key)
+    end
+end
+
 function ZoteroBrowser:displaySearchResults(query)
     local items = ZoteroAPI.displaySearchResults(query)
-    if table_empty(items) then
-        table.insert(items, 1, {
-            ["text"] = _("No Results"),
-            ["is_label"] = true,
-        })
-    end
+    items = self:addEmptyLabelIfApplicable(items)
     self:setItems(items)
 end
 
@@ -159,7 +162,13 @@ function ZoteroBrowser:displayCollection(collection_id)
             ["type"] = "wildcard_collection"
         })
     end
+    items = self:addEmptyLabelIfApplicable(items)
 
+
+    self:setItems(items)
+end
+
+function ZoteroBrowser:addEmptyLabelIfApplicable(items)
     if table_empty(items) then
         table.insert(items, 1, {
             ["text"] = _("No Items"),
@@ -167,7 +176,14 @@ function ZoteroBrowser:displayCollection(collection_id)
         })
     end
 
-    self:setItems(items)
+    return items
+end
+
+function ZoteroBrowser:displayAttachments(key)
+    local attachments = ZoteroAPI.getItemAttachments(key) or {}
+    attachments = self:addEmptyLabelIfApplicable(attachments)
+
+    self:setItems(attachments)
 end
 
 function ZoteroBrowser:setItems(items)
