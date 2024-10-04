@@ -15,6 +15,7 @@ local Geom = require("ui/geometry")
 local _ = require("gettext")
 local ZoteroAPI = require("zoteroapi")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
+local ButtonDialog = require("ui/widget/buttondialog")
 local lfs = require("libs/libkoreader-lfs")
 
 
@@ -144,6 +145,33 @@ function ZoteroBrowser:onMenuHold(item)
     if item.type == "item" then
         table.insert(self.paths, item.key)
         self:displayAttachments(item.key)
+    elseif item.type == "collection" then
+        local is_offline_enabled = ZoteroAPI.isOfflineCollection(item.key)
+        local button_label = "▢  Download this collection during sync"
+        if is_offline_enabled then
+            button_label = "✓ Download this collection during sync"
+        end
+        local collection_dialog
+        collection_dialog = ButtonDialog:new{
+            title = item.text,
+            buttons = {
+                {
+                {
+                    text = button_label,
+                    callback = function()
+                        if is_offline_enabled then
+                            ZoteroAPI.removeOfflineCollection(item.key)
+                        else
+                            ZoteroAPI.addOfflineCollection(item.key)
+                        end
+                        UIManager:close(collection_dialog)
+                    end
+
+                }
+            }
+            }
+        }
+        UIManager:show(collection_dialog)
     end
 end
 
