@@ -561,7 +561,7 @@ local function newKoreaderAnnotation(annotation, pageHeightinPoints)
             --["text"] = annotation.data.annotationComment,
         --},
         ["highlight"] = {
-            ["datetime"] = annotation.data.dateModified,
+            ["datetime"] = string.sub(string.gsub(annotation.data.dateModified, "T", " "), 1, -2),
             ["drawer"] = "lighten",
             ["page"] = page,
             ["pboxes"] = rects,
