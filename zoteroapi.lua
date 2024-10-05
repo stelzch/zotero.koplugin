@@ -7,6 +7,7 @@ local JSON = require("json")
 local lfs = require("libs/libkoreader-lfs")
 local DocSettings = require("docsettings")
 local sha2 = require("ffi/sha2")
+local Geom = require("ui/geometry")
 
 -- Functions expect config parameter, a lua table with the following keys:
 -- zotero_dir: Path to a directory where cache files will be stored
@@ -428,7 +429,9 @@ function API.downloadAndGetPath(key, download_callback)
 
     local targetDir, targetPath = API.getDirAndPath(key)
     lfs.mkdir(targetDir)
-
+    
+    API.syncAnnotations(key)
+    
     local local_version = tonumber(file_slurp(targetDir .. "/version"))
 
     if local_version ~= nil and local_version >= attachment.version and file_exists(targetPath) then
@@ -509,6 +512,70 @@ function API.getWebDAVHeaders()
     }
 end
 
+local function newKoreaderAnnotation(annotation, pageHeightinPoints)
+    local pos = JSON.decode(annotation.data.annotationPosition)
+    local page = pos.pageIndex + 1
+
+    local rects = {}
+    for k, bbox in ipairs(pos.rects) do
+        table.insert(rects, {
+            ["x"] = bbox[1],
+            ["y"] = pageHeightinPoints - bbox[4],
+            ["w"] = bbox[3] - bbox[1],
+            ["h"] = bbox[4] - bbox[2],
+        })
+    end
+    assert(#rects > 0)
+
+    local shift = 1
+    -- KOReader seems to find 'single word' text boxes which contain pos0 and pos1 to work out the boundaries of the highlight.
+    -- If the positions are not inside any box it looks for the box which has its centre closest to the position. To avoid unexpected
+    -- behaviour shift the positions slightly inside the first/last word box. Assumes top left to bottom right word arrangement...
+    local pos0 = {
+        ["page"] = page,
+        ["rotation"] = 0,
+        ["x"] = rects[1].x + shift,
+        ["y"] = rects[1].y + shift,
+    }
+    -- Take last bounding box
+    local pos1 = {
+        ["page"] = page,
+        ["rotation"] = 0,
+        ["x"] = rects[#rects].x + rects[#rects].w - shift,
+        ["y"] = rects[#rects].y + rects[#rects].h - shift,
+    }
+
+--    local datetime = os.date("%Y-%m-%d %H:%M:%S")
+
+    local r = {
+        --["bookmark"] = {
+            --["pos0"] = pos0,
+            --["pos1"] = pos1,
+            --["notes"] = annotation.data.annotationText,
+            --["datetime"] = datetime,
+            --["highlighted"] = true,
+            --["chapter"] = "",
+            --["page"] = page,
+            --["zoteroKey"] = annotation.key,
+            --["zoteroVersion"] = annotation.version,
+            --["text"] = annotation.data.annotationComment,
+        --},
+        ["highlight"] = {
+            ["datetime"] = annotation.data.dateModified,
+            ["drawer"] = "lighten",
+            ["page"] = page,
+            ["pboxes"] = rects,
+            ["pos0"] = pos0,
+            ["pos1"] = pos1,
+            ["note"] = annotation.data.annotationComment,
+            ["text"] = annotation.data.annotationText,
+            ["zoteroKey"] = annotation.key,
+            ["zoteroVersion"] = annotation.version,
+        },
+    }
+    return r
+end
+
 -- Return a table of entries of a collection.
 --
 -- If key is nil, entries of the root collection will be given.
@@ -576,6 +643,10 @@ function API.displayCollection(key)
 		end
     end
     table.sort(collectionItems, comparator)
+    
+--    newKoreaderAnnotation(items["D8G25LEW"], 792)
+--    print("Creating zotero annotation ", JSON.encode(newKoreaderAnnotation(items["D8G25LEW"], 792)))
+--    API.syncAnnotations("ZNDJRRTK")
 
     -- Join collections and items together and return it
     return joinTables(result, collectionItems)
@@ -651,5 +722,108 @@ end
 function API.syncModifiedItems()
     local modItems = API.getModifiedItems()
 end
+
+-- Sync annotations from Zotero with sdr folder
+function API.syncAnnotations(itemKey)
+    local items = API.getItems()
+    local fileDir, filePath = API.getDirAndPath(itemKey)
+
+    if filePath == nil then
+        return "Error: could not find item"
+    end
+
+    print("Scanning collection")
+
+
+    -- Scan zotero annotations.
+    -- Add them to the docsettings if they are not there yet, or update them if
+    -- they already exist but are outdated
+    local zoteroAnnotations = {}
+    for annotationKey, annotation in pairs(items) do
+        if annotation.data.parentItem == itemKey
+            and annotation.data.itemType == "annotation"
+            and annotation.data.annotationType == "highlight" then
+            zoteroAnnotations[annotationKey] = annotation
+        end
+    end
+
+--    local docSettings = DocSettings:open(filePath)
+    --local koreaderAnnotations = findHighlightsAndBookmarks(docSettings)
+    --print("KOREader Annotations: ", JSON.encode(koreaderAnnotations))
+
+    ---- Iterate over KOReader annotations, add modifications to zotero items
+    --for annotationKey, annotation in ipairs(koreaderAnnotations) do
+        --print("KOReader ", annotationKey)
+        --if type(annotationKey) == "string" then
+            --local zoteroAnnotation = zoteroAnnotations[annotationKey]
+            --if annotation.bookmark.zoteroVersion == zoteroAnnotation.version and
+                --annotation.bookmark.zoteroKey ~= nil then
+                ---- The annotation already has an assigned Zotero key, just update the Zotero
+                --local updated = modifiedZoteroAnnotation(annotation)
+                --API.addModifiedItem(updated)
+                --print("Updating zotero annotation ", annotation.bookmark.notes, annotation.bookmark.text)
+            --else
+                ---- The KOReader version is older, we keep the Zotero version
+                --print("Zotero is newer: ", zoteroAnnotation.data.annotationText)
+            --end
+        --else
+            ---- Create a new zotero annotation
+            --local new = newZoteroAnnotation(annotation, itemKey)
+            --print("Creating zotero annotation ", JSON.encode(new))
+            --API.addModifiedItem(new)
+        --end
+    --end
+
+    --local highlight = docSettings:readSetting("highlight", {})
+    --local bookmark = docSettings:readSetting("bookmarks", {})
+    --local modItems = API.getModifiedItems()
+
+    --print("Zotero annotations: ", JSON.encode(zoteroAnnotations))
+    local i = 1
+    local koAnnotations = {}
+    for annotationKey, annotation in pairs(zoteroAnnotations) do
+      koAnnotations[i] = newKoreaderAnnotation(annotation, 792).highlight
+      i = i + 1
+    end
+--    print(i, " KOreader from zotero annotation")
+--    print(JSON.encode(koAnnotations))
+    
+    local settings_path = BaseUtil.joinPath(fileDir, "meta.lua")
+    print(settings_path)
+    local settings = LuaSettings:open(settings_path)
+    settings:saveSetting("annotations", koAnnotations)
+    settings:flush()
+
+    ---- Iterate over Zotero annotations, add KOReader items if necessary
+    --for annotationKey, annotation in pairs(zoteroAnnotations) do
+        ---- Try to find KOReader annotation
+        --local koreaderAnnotation = koreaderAnnotations[annotationKey]
+
+        --if koreaderAnnotation == nil then
+            ---- There is no corresponding koreader annotation, just add a new one.
+            --koreaderAnnotation = newKoreaderAnnotation(annotation)
+            --local page = koreaderAnnotation.bookmark.page
+            --table.insert(bookmark, koreaderAnnotation.bookmark)
+            --highlight[page] = highlight[page] or {}
+            --table.insert(highlight[page], koreaderAnnotation.highlight)
+            --print("Creating koreader annotation ", koreaderAnnotation.bookmark.notes, koreaderAnnotation.bookmark.text)
+        --else
+            --print("Modifying existing zotero annotation")
+            ---- The koreader annotation already exists, try to update it.
+            --if modItems[annotationKey] ~= nil then
+                ---- The item was already modified, so the KOReader annotation was newer.
+                ---- Skip update in this round.
+            --else
+                --bookmark[koreaderAnnotation.bookmarkIndex].text = annotation.data.annotationType
+            --end
+        --end
+    --end
+
+--    docSettings:saveSetting("highlight", highlight)
+--    docSettings:saveSetting("bookmarks", bookmark)
+--    docSettings:flush()
+--    API.saveModifiedItems()
+end
+
 
 return API
