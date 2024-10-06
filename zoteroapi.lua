@@ -430,8 +430,6 @@ function API.downloadAndGetPath(key, download_callback)
     local targetDir, targetPath = API.getDirAndPath(key)
     lfs.mkdir(targetDir)
     
-    API.syncAnnotations(key)
-    
     local local_version = tonumber(file_slurp(targetDir .. "/version"))
 
     if local_version ~= nil and local_version >= attachment.version and file_exists(targetPath) then
@@ -459,13 +457,15 @@ function API.downloadAndGetPath(key, download_callback)
         local e = API.verifyResponse(r, c)
         if e ~= nil then return nil, e end
     end
-
+    
     local versionFile = io.open(targetDir .. "/version", "w")
     if versionFile == nil then
         return nil, "Could not write version file"
     end
     versionFile:write(tostring(attachment.version))
     versionFile:close()
+
+    API.syncAnnotations(key)
 
     return targetPath, nil
 end
@@ -515,7 +515,8 @@ end
 local function newKoreaderAnnotation(annotation, pageHeightinPoints)
     local pos = JSON.decode(annotation.data.annotationPosition)
     local page = pos.pageIndex + 1
-
+    
+    -- print("Page height: ", pageHeightinPoints)
     local rects = {}
     for k, bbox in ipairs(pos.rects) do
         table.insert(rects, {
@@ -561,7 +562,7 @@ local function newKoreaderAnnotation(annotation, pageHeightinPoints)
             --["text"] = annotation.data.annotationComment,
         --},
         ["highlight"] = {
-            ["datetime"] = string.sub(string.gsub(annotation.data.dateModified, "T", " "), 1, -2),
+            ["datetime"] = string.sub(string.gsub(annotation.data.dateModified, "T", " "), 1, -2), -- convert format
             ["drawer"] = "lighten",
             ["page"] = page,
             ["pboxes"] = rects,
@@ -732,20 +733,29 @@ function API.syncAnnotations(itemKey)
         return "Error: could not find item"
     end
 
-    print("Scanning collection")
+    print("Checking for annoations")
 
 
     -- Scan zotero annotations.
     -- Add them to the docsettings if they are not there yet, or update them if
     -- they already exist but are outdated
     local zoteroAnnotations = {}
+    local zotCount = 0
     for annotationKey, annotation in pairs(items) do
         if annotation.data.parentItem == itemKey
             and annotation.data.itemType == "annotation"
             and annotation.data.annotationType == "highlight" then
             zoteroAnnotations[annotationKey] = annotation
+            zotCount = zotCount + 1
         end
     end
+    
+    -- Sort collections by name
+    --local comparator = function(a,b)
+    --    return (a["annotationSortIndex"] > b["annotationSortIndex"])
+    --end
+    --table.sort(zoteroAnnotations, comparator)
+
 
 --    local docSettings = DocSettings:open(filePath)
     --local koreaderAnnotations = findHighlightsAndBookmarks(docSettings)
@@ -778,21 +788,39 @@ function API.syncAnnotations(itemKey)
     --local bookmark = docSettings:readSetting("bookmarks", {})
     --local modItems = API.getModifiedItems()
 
-    --print("Zotero annotations: ", JSON.encode(zoteroAnnotations))
-    local i = 1
     local koAnnotations = {}
-    for annotationKey, annotation in pairs(zoteroAnnotations) do
-      koAnnotations[i] = newKoreaderAnnotation(annotation, 792).highlight
-      i = i + 1
+    print("Found zotero annotations: ", zotCount)
+    if zotCount > 0 then
+        --print("Zotero annotations: ", JSON.encode(zoteroAnnotations))
+        
+        -- We need to get page height of pdf document to be able to convert Zotero position to KOReader positions
+        -- Open document to get the dimensions of the first page
+        local DocumentRegistry = require("document/documentregistry")	
+        local provider = DocumentRegistry:getProvider(filePath)	
+        local document = DocumentRegistry:openDocument(filePath, provider)
+        if not document then
+            UIManager:show(InfoMessage:new{
+                text = _("No reader engine for this file or invalid file.")
+            })
+            return
+        end
+        -- Assume all pages have the same dimensions and thus just take first page:
+        local pageDims = document:getNativePageDimensions(1)
+        print("Page dimensions: ", JSON.encode(pageDims))
+        document:close()
+        local i = 1
+        for annotationKey, annotation in pairs(zoteroAnnotations) do
+          koAnnotations[i] = newKoreaderAnnotation(annotation, pageDims.h).highlight
+          i = i + 1
+        end
+--      print(i, " KOreader from zotero annotation")
+--      print(JSON.encode(koAnnotations))    
+        local settings_path = BaseUtil.joinPath(fileDir, "meta.lua")
+        print(settings_path)
+        local settings = LuaSettings:open(settings_path)
+        settings:saveSetting("annotations", koAnnotations)
+        settings:flush()        
     end
---    print(i, " KOreader from zotero annotation")
---    print(JSON.encode(koAnnotations))
-    
-    local settings_path = BaseUtil.joinPath(fileDir, "meta.lua")
-    print(settings_path)
-    local settings = LuaSettings:open(settings_path)
-    settings:saveSetting("annotations", koAnnotations)
-    settings:flush()
 
     ---- Iterate over Zotero annotations, add KOReader items if necessary
     --for annotationKey, annotation in pairs(zoteroAnnotations) do
