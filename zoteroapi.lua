@@ -465,7 +465,7 @@ function API.downloadAndGetPath(key, download_callback)
     versionFile:write(tostring(attachment.version))
     versionFile:close()
 
-    API.syncAnnotations(key)
+    API.syncItemAnnotations(key)
 
     return targetPath, nil
 end
@@ -512,11 +512,12 @@ function API.getWebDAVHeaders()
     }
 end
 
-local function newKoreaderAnnotation(annotation, pageHeightinPoints)
+-- Convert a Zotero annotation item to a KOReader annotation
+-- NOTE: currently only works with text highlights and annotations.
+local function zotero2KoreaderAnnotation(annotation, pageHeightinPoints)
     local pos = JSON.decode(annotation.data.annotationPosition)
     local page = pos.pageIndex + 1
     
-    -- print("Page height: ", pageHeightinPoints)
     local rects = {}
     for k, bbox in ipairs(pos.rects) do
         table.insert(rects, {
@@ -545,36 +546,24 @@ local function newKoreaderAnnotation(annotation, pageHeightinPoints)
         ["x"] = rects[#rects].x + rects[#rects].w - shift,
         ["y"] = rects[#rects].y + rects[#rects].h - shift,
     }
-
---    local datetime = os.date("%Y-%m-%d %H:%M:%S")
-
-    local r = {
-        --["bookmark"] = {
-            --["pos0"] = pos0,
-            --["pos1"] = pos1,
-            --["notes"] = annotation.data.annotationText,
-            --["datetime"] = datetime,
-            --["highlighted"] = true,
-            --["chapter"] = "",
-            --["page"] = page,
-            --["zoteroKey"] = annotation.key,
-            --["zoteroVersion"] = annotation.version,
-            --["text"] = annotation.data.annotationComment,
-        --},
-        ["highlight"] = {
+    -- Convert Zotero time stamp to the format used by KOReader
+    -- e.g. "2024-09-24T18:13:49Z" to "2024-09-24 18:13:49"
+    local koAnnotation = {
             ["datetime"] = string.sub(string.gsub(annotation.data.dateModified, "T", " "), 1, -2), -- convert format
             ["drawer"] = "lighten",
             ["page"] = page,
             ["pboxes"] = rects,
             ["pos0"] = pos0,
             ["pos1"] = pos1,
-            ["note"] = annotation.data.annotationComment,
             ["text"] = annotation.data.annotationText,
             ["zoteroKey"] = annotation.key,
             ["zoteroVersion"] = annotation.version,
-        },
-    }
-    return r
+        }
+    -- KOReader seems to use the presence of the "note" field to distinguish between "highlight" and "note"
+    -- Important for how they get displayed in the bookmarks!
+    if (annotation.data.annotationComment ~= "") then koAnnotation["note"] = annotation.data.annotationComment end
+
+    return koAnnotation
 end
 
 -- Return a table of entries of a collection.
@@ -645,10 +634,6 @@ function API.displayCollection(key)
     end
     table.sort(collectionItems, comparator)
     
---    newKoreaderAnnotation(items["D8G25LEW"], 792)
---    print("Creating zotero annotation ", JSON.encode(newKoreaderAnnotation(items["D8G25LEW"], 792)))
---    API.syncAnnotations("ZNDJRRTK")
-
     -- Join collections and items together and return it
     return joinTables(result, collectionItems)
 end
@@ -724,8 +709,8 @@ function API.syncModifiedItems()
     local modItems = API.getModifiedItems()
 end
 
--- Sync annotations from Zotero with sdr folder
-function API.syncAnnotations(itemKey)
+-- Sync annotations for specified titem from Zotero with sdr folder
+function API.syncItemAnnotations(itemKey)
     local items = API.getItems()
     local fileDir, filePath = API.getDirAndPath(itemKey)
 
@@ -737,8 +722,6 @@ function API.syncAnnotations(itemKey)
 
 
     -- Scan zotero annotations.
-    -- Add them to the docsettings if they are not there yet, or update them if
-    -- they already exist but are outdated
     local zoteroAnnotations = {}
     local zotCount = 0
     for annotationKey, annotation in pairs(items) do
@@ -750,14 +733,14 @@ function API.syncAnnotations(itemKey)
         end
     end
     
-    -- Sort collections by name
     --local comparator = function(a,b)
-    --    return (a["annotationSortIndex"] > b["annotationSortIndex"])
+    --    return (a["annotationSortIndex"] < b["annotationSortIndex"])
     --end
     --table.sort(zoteroAnnotations, comparator)
 
-
---    local docSettings = DocSettings:open(filePath)
+    -- Add them to the docsettings if they are not there yet, or update them if
+    -- they already exist but are outdated
+    local docSettings = DocSettings:open(filePath)
     --local koreaderAnnotations = findHighlightsAndBookmarks(docSettings)
     --print("KOREader Annotations: ", JSON.encode(koreaderAnnotations))
 
@@ -808,14 +791,16 @@ function API.syncAnnotations(itemKey)
         local pageDims = document:getNativePageDimensions(1)
         print("Page dimensions: ", JSON.encode(pageDims))
         document:close()
-        local i = 1
+--        local i = 1
         for annotationKey, annotation in pairs(zoteroAnnotations) do
-          koAnnotations[i] = newKoreaderAnnotation(annotation, pageDims.h).highlight
-          i = i + 1
+            table.insert(koAnnotations, zotero2KoreaderAnnotation(annotation, pageDims.h))
+--          koAnnotations[i] = zotero2KoreaderAnnotation(annotation, pageDims.h)
+--          i = i + 1
         end
 --      print(i, " KOreader from zotero annotation")
 --      print(JSON.encode(koAnnotations))    
-        local settings_path = BaseUtil.joinPath(fileDir, "meta.lua")
+--  Not sure this is still needed. But useful for debugging:
+        local settings_path = BaseUtil.joinPath(fileDir, "metadata.zotero.lua")
         print(settings_path)
         local settings = LuaSettings:open(settings_path)
         settings:saveSetting("annotations", koAnnotations)
@@ -829,7 +814,7 @@ function API.syncAnnotations(itemKey)
 
         --if koreaderAnnotation == nil then
             ---- There is no corresponding koreader annotation, just add a new one.
-            --koreaderAnnotation = newKoreaderAnnotation(annotation)
+            --koreaderAnnotation = zotero2KoreaderAnnotation(annotation)
             --local page = koreaderAnnotation.bookmark.page
             --table.insert(bookmark, koreaderAnnotation.bookmark)
             --highlight[page] = highlight[page] or {}
@@ -848,8 +833,8 @@ function API.syncAnnotations(itemKey)
     --end
 
 --    docSettings:saveSetting("highlight", highlight)
---    docSettings:saveSetting("bookmarks", bookmark)
---    docSettings:flush()
+    docSettings:saveSetting("annotations", koAnnotations)
+    docSettings:flush()
 --    API.saveModifiedItems()
 end
 
