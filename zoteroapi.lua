@@ -557,6 +557,7 @@ local function zotero2KoreaderAnnotation(annotation, pageHeightinPoints)
             ["pos1"] = pos1,
             ["text"] = annotation.data.annotationText,
             ["zoteroKey"] = annotation.key,
+            ["zoteroSortIndex"] = annotation.data.annotationSortIndex,
             ["zoteroVersion"] = annotation.version,
         }
     -- KOReader seems to use the presence of the "note" field to distinguish between "highlight" and "note"
@@ -733,10 +734,6 @@ function API.syncItemAnnotations(itemKey)
         end
     end
     
-    --local comparator = function(a,b)
-    --    return (a["annotationSortIndex"] < b["annotationSortIndex"])
-    --end
-    --table.sort(zoteroAnnotations, comparator)
 
     -- Add them to the docsettings if they are not there yet, or update them if
     -- they already exist but are outdated
@@ -791,13 +788,16 @@ function API.syncItemAnnotations(itemKey)
         local pageDims = document:getNativePageDimensions(1)
         print("Page dimensions: ", JSON.encode(pageDims))
         document:close()
---        local i = 1
+
         for annotationKey, annotation in pairs(zoteroAnnotations) do
             table.insert(koAnnotations, zotero2KoreaderAnnotation(annotation, pageDims.h))
---          koAnnotations[i] = zotero2KoreaderAnnotation(annotation, pageDims.h)
---          i = i + 1
         end
---      print(i, " KOreader from zotero annotation")
+
+        local comparator = function(a,b)
+            return (a["zoteroSortIndex"] < b["zoteroSortIndex"])
+        end
+        table.sort(koAnnotations, comparator)
+
 --      print(JSON.encode(koAnnotations))    
 --  Not sure this is still needed. But useful for debugging:
         local settings_path = BaseUtil.joinPath(fileDir, "metadata.zotero.lua")
