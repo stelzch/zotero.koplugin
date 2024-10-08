@@ -433,6 +433,7 @@ function API.downloadAndGetPath(key, download_callback)
     local local_version = tonumber(file_slurp(targetDir .. "/version"))
 
     if local_version ~= nil and local_version >= attachment.version and file_exists(targetPath) then
+        API.syncItemAnnotations(key) -- File is up to date, but check whether annotations need updating
         return targetPath, nil -- all done, local file is up to date
     end
 
@@ -710,7 +711,7 @@ function API.syncModifiedItems()
     local modItems = API.getModifiedItems()
 end
 
--- Sync annotations for specified titem from Zotero with sdr folder
+-- Sync annotations for specified item from Zotero with sdr folder
 function API.syncItemAnnotations(itemKey)
     local items = API.getItems()
     local fileDir, filePath = API.getDirAndPath(itemKey)
@@ -718,10 +719,13 @@ function API.syncItemAnnotations(itemKey)
     if filePath == nil then
         return "Error: could not find item"
     end
-
-    print("Checking for annoations")
-
-
+    
+    local settings = LuaSettings:open(BaseUtil.joinPath(fileDir, ".zotero.metadata.lua"))    
+    local localLibVersion = settings:readSetting("libraryVersion", 0)
+    local libVersion = tonumber(API.getLibraryVersion())
+    print("Lib version: ", localLibVersion)
+    if localLibVersion >= libVersion then print("No need to check database") end
+    print("Checking items annotations")
     -- Scan zotero annotations.
     local zoteroAnnotations = {}
     local zotCount = 0
@@ -734,12 +738,13 @@ function API.syncItemAnnotations(itemKey)
         end
     end
     
-
-    -- Add them to the docsettings if they are not there yet, or update them if
-    -- they already exist but are outdated
+    -- Add them to the docsettings 
+    -- NOTE: Currently annotations that are not already there just get overwritten
+    -- TO_DO: Should update existing one and sync back changes and new annotations
     local docSettings = DocSettings:open(filePath)
-    --local koreaderAnnotations = findHighlightsAndBookmarks(docSettings)
-    --print("KOREader Annotations: ", JSON.encode(koreaderAnnotations))
+    
+    local koreaderAnnotations = docSettings:readSetting("annotations", {})
+    print(#koreaderAnnotations.." KOREader Annotations: ", JSON.encode(koreaderAnnotations))
 
     ---- Iterate over KOReader annotations, add modifications to zotero items
     --for annotationKey, annotation in ipairs(koreaderAnnotations) do
@@ -793,20 +798,18 @@ function API.syncItemAnnotations(itemKey)
             table.insert(koAnnotations, zotero2KoreaderAnnotation(annotation, pageDims.h))
         end
 
+        -- Use zoteroSortIndex for sorting.
+        -- No idea how this index is generated, but this seems to work...
         local comparator = function(a,b)
             return (a["zoteroSortIndex"] < b["zoteroSortIndex"])
         end
         table.sort(koAnnotations, comparator)
 
---      print(JSON.encode(koAnnotations))    
---  Not sure this is still needed. But useful for debugging:
-        local settings_path = BaseUtil.joinPath(fileDir, "metadata.zotero.lua")
-        print(settings_path)
-        local settings = LuaSettings:open(settings_path)
-        settings:saveSetting("annotations", koAnnotations)
-        settings:flush()        
+--      print(JSON.encode(koAnnotations))          
     end
-
+    settings:saveSetting("annotations", koAnnotations)
+    settings:saveSetting("libraryVersion", tonumber(API.getLibraryVersion()))
+    settings:flush() 
     ---- Iterate over Zotero annotations, add KOReader items if necessary
     --for annotationKey, annotation in pairs(zoteroAnnotations) do
         ---- Try to find KOReader annotation
