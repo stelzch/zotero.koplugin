@@ -720,21 +720,32 @@ function API.syncItemAnnotations(itemKey)
         return "Error: could not find item"
     end
     
+    -- (Relevant) Zotero annotation keys (currentlly only for highlights)
+    local zoteroItems = {}
+    local updateNeeded = true
+
+    local zoteroAnnotations = {}
+    local zotCount = 0
+    
     local settings = LuaSettings:open(BaseUtil.joinPath(fileDir, ".zotero.metadata.lua"))    
     local localLibVersion = settings:readSetting("libraryVersion", 0)
     local libVersion = tonumber(API.getLibraryVersion())
     print("Lib version: ", localLibVersion)
-    if localLibVersion >= libVersion then print("No need to check database") end
-    print("Checking items annotations")
-    -- Scan zotero annotations.
-    local zoteroAnnotations = {}
-    local zotCount = 0
-    for annotationKey, annotation in pairs(items) do
-        if annotation.data.parentItem == itemKey
-            and annotation.data.itemType == "annotation"
-            and annotation.data.annotationType == "highlight" then
-            zoteroAnnotations[annotationKey] = annotation
-            zotCount = zotCount + 1
+    if localLibVersion >= libVersion then 
+        print("No need to check Zotero database") 
+        zoteroItems = settings:readSetting("zoteroItems")
+        updateNeeded = false
+    else
+        print("Checking items annotations")
+        -- Scan zotero annotations.
+        for annotationKey, annotation in pairs(items) do
+            if annotation.data.parentItem == itemKey
+                and annotation.data.itemType == "annotation"
+                and annotation.data.annotationType == "highlight" then
+                zoteroAnnotations[annotationKey] = annotation
+                table.insert(zoteroItems, { ["key"] = annotationKey })
+                zotCount = zotCount + 1
+            end
         end
     end
     
@@ -744,9 +755,45 @@ function API.syncItemAnnotations(itemKey)
     local docSettings = DocSettings:open(filePath)
     
     local koreaderAnnotations = docSettings:readSetting("annotations", {})
-    print(#koreaderAnnotations.." KOREader Annotations: ", JSON.encode(koreaderAnnotations))
+    print(#koreaderAnnotations.." KOReader Annotations. ")
 
-    ---- Iterate over KOReader annotations, add modifications to zotero items
+    local localZotAnn = {}
+    local localKORAnn = {}
+    if #koreaderAnnotations > 0 then
+        -- Iterate over KOReader annotations to check which ones are zotero items
+        for idx, ann in ipairs(koreaderAnnotations) do
+            if (ann.zoteroKey ~= nil) then
+                print("KOReader annotation imported from Zotero ", ann.zoteroKey)
+                localZotAnn[ann.zoteroKey] = idx
+            else
+                print("Additional KOReader annotation", ann.text)
+                table.insert(localKORAnn, idx)
+            end
+        end
+        -- Iterate over local Zotero annotations to check whether they have been changed
+        for key, idx in pairs(localZotAnn) do
+            local item = items[key]
+            local ann = koreaderAnnotations[idx]
+            if item ~= nil then
+                if item.version > ann.zoteroVersion then
+                    print("Database item is newer. Overwrite local version of "..key)
+                    --zoteroItems[key].status = "old"
+                else
+                    if item.data.annotationComment == ann.note then
+                        print("Up to date "..key) 
+                        --zoteroItems[key].status = "ok"
+                    else
+                        print("Locally modified note "..key) 
+                        --zoteroItems[key].status = "newer" 
+                    end                   
+                end
+            else
+                print("Annotation has been deleted in Zotero "..key)
+                --zoteroItems[key].status = "deleted"        
+            end
+        end
+        print("Zotero annotations ", JSON.encode(zoteroItems))
+    end
     --for annotationKey, annotation in ipairs(koreaderAnnotations) do
         --print("KOReader ", annotationKey)
         --if type(annotationKey) == "string" then
@@ -774,8 +821,8 @@ function API.syncItemAnnotations(itemKey)
     --local modItems = API.getModifiedItems()
 
     local koAnnotations = {}
-    print("Found zotero annotations: ", zotCount)
-    if zotCount > 0 then
+    if updateNeeded and zotCount > 0 then
+        print("Found zotero annotations: ", zotCount)
         --print("Zotero annotations: ", JSON.encode(zoteroAnnotations))
         
         -- We need to get page height of pdf document to be able to convert Zotero position to KOReader positions
@@ -805,9 +852,14 @@ function API.syncItemAnnotations(itemKey)
         end
         table.sort(koAnnotations, comparator)
 
+        -- Write to sdr file
+        docSettings:saveSetting("annotations", koAnnotations)
+
 --      print(JSON.encode(koAnnotations))          
     end
-    settings:saveSetting("annotations", koAnnotations)
+    
+--    settings:saveSetting("annotations", koAnnotations)
+    settings:saveSetting("zoteroItems", zoteroItems)
     settings:saveSetting("libraryVersion", tonumber(API.getLibraryVersion()))
     settings:flush() 
     ---- Iterate over Zotero annotations, add KOReader items if necessary
@@ -836,7 +888,6 @@ function API.syncItemAnnotations(itemKey)
     --end
 
 --    docSettings:saveSetting("highlight", highlight)
-    docSettings:saveSetting("annotations", koAnnotations)
     docSettings:flush()
 --    API.saveModifiedItems()
 end
