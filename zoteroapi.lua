@@ -8,7 +8,7 @@ local lfs = require("libs/libkoreader-lfs")
 local DocSettings = require("docsettings")
 local sha2 = require("ffi/sha2")
 local SQ3 = require("lua-ljsqlite3/init")
-local ffi = require("ffi")
+local Annotations = require("annotations")
 local _ = require("gettext")
 
 -- Functions expect config parameter, a lua table with the following keys:
@@ -86,17 +86,32 @@ WHERE
 AND EXISTS (SELECT collection_hierarchy.key FROM collection_hierarchy INTERSECT SELECT value FROM json_each(jsonb_extract(attachment_data.parent_value, '$.data.collections')))
 -- and local version must be lower than remote version (otherwise its considered up-to-date)
 AND coalesce((SELECT version FROM attachment_versions WHERE attachment_versions.key = attachment_data.key), 0) < jsonb_extract(attachment_data.value, '$.version');
+
+-- select all pdf attachments present locally
+CREATE TEMPORARY VIEW IF NOT EXISTS local_pdf_items AS
+SELECT
+    items.key AS key,
+    jsonb_extract(items.value, '$.data.filename') AS filename
+FROM attachment_versions
+LEFT JOIN items ON attachment_versions.key = items.key
+WHERE
+(jsonb_extract(items.value, '$.data.linkMode') IN (SELECT type FROM supported_link_types)) AND
+(jsonb_extract(items.value, '$.data.contentType') = 'application/pdf');
 ]]
 
 local ZOTERO_GET_DOWNLOAD_QUEUE = [[
-SELECT
+select
     item_download_queue.key,
-    jsonb_extract(items.value, '$.data.filename') AS filename
-FROM item_download_queue
-LEFT JOIN items ON items.key = item_download_queue.key;
+    jsonb_extract(items.value, '$.data.filename') as filename
+from item_download_queue
+left join items on items.key = item_download_queue.key;
 ]]
 
 local ZOTERO_GET_DOWNLOAD_QUEUE_SIZE = [[ SELECT COUNT(*) FROM item_download_queue; ]]
+
+local ZOTERO_GET_LOCAL_PDF_ITEMS = [[ SELECT * FROM local_pdf_items; ]]
+
+local ZOTERO_GET_LOCAL_PDF_ITEMS_SIZE = [[ SELECT COUNT(*) FROM local_pdf_items; ]]
 
 local ZOTERO_DB_UPDATE_ITEM = [[
 INSERT INTO items(key, value) VALUES(?,jsonb(?)) ON CONFLICT DO UPDATE SET value = excluded.value;
@@ -237,7 +252,9 @@ function API.openDB()
         return API.db
     else
         API.db = SQ3.open(API.db_path)
+        print("Z: openDB opened")
         API.db:exec(ZOTERO_CREATE_VIEWS)
+        print("Z: created views")
         return API.db
     end
 
@@ -266,9 +283,13 @@ function API.init(zotero_dir)
     print("Z: storage dir" .. API.storage_dir)
 
     API.db_path = BaseUtil.joinPath(API.zotero_dir, "zotero.db")
+    print("Z: opening db path ", API.db_path)
     local db = API.openDB()
+    print("Z: DB opened")
     db:exec(ZOTERO_DB_SCHEMA)
+    print("Z: DB init schema")
     db:exec(ZOTERO_CREATE_VIEWS)
+    print("Z: view init")
 end
 
 function API.getAPIKey()
@@ -447,7 +468,7 @@ function API.fetchCollectionPaginated(collection_url, headers, callback)
         library_version = h["last-modified-version"]
 
         local e = API.verifyResponse(r, c)
-        if e ~= nil then return nil, e end
+if e ~= nil then return nil, e end
 
         local content = table.concat(page_data, "")
         local ok, result = pcall(JSON.decode, content)
@@ -543,6 +564,7 @@ function API.syncAllItems(progress_callback)
     API.setLibraryVersion(r)
 
     API.batchDownload(callback)
+    API.syncAnnotations()
 
     return nil
 end
@@ -790,42 +812,6 @@ function API.displaySearchResults(query)
 end
 
 
--- Output the timezone-agnostic timestamp, since KOReader uses timestamps with
--- local time.
-function API.addTimezone(timestamp)
-    local year, month, day, hour, minute, second = string.match(timestamp,
-        "(%d%d%d%d)-(%d%d)-(%d%d) (%d%d):(%d%d):(%d%d)")
-    local time = {
-        ["year"] = year,
-        ["month"] = month,
-        ["day"] = day,
-        ["hour"] = hour,
-        ["min"] = minute,
-        ["sec"] = second
-    }
-
-    return os.date("!%Y-%m-%dT%H:%M:%SZ", os.time(time))
-end
-
-function API.localTimezone(timestamp)
-end
-
-function API.compareTimestamps(zoteroTimestamp, koreaderTimestamp)
-    local a,b = zoteroTimestamp, API.addTimezone(koreaderTimestamp)
-
-    if a == b then
-       return 0
-    elseif a < b then
-        return -1
-    else
-        return 1
-    end
-end
-
-function API.syncModifiedItems()
-    local modItems = API.getModifiedItems()
-end
-
 function API.resetSyncState()
     local db = API.openDB()
     db:exec(ZOTERO_DB_DELETE)
@@ -877,5 +863,112 @@ function API.setAttachmentVersion(key, version)
     stmt:reset():bind(key, version):step()
     stmt:close()
 end
+
+function API.syncAnnotations(progress_callback)
+    local db = API.openDB()
+    local item_count = db:exec(ZOTERO_GET_LOCAL_PDF_ITEMS_SIZE)[1][1]
+
+
+    local stmt = db:prepare(ZOTERO_GET_LOCAL_PDF_ITEMS)
+
+    stmt:reset()
+    stmt:clearbind()
+
+    local row, _ = stmt:step({}, {})
+    local i = 1
+    while row ~= nil do
+        local key = row[1]
+        local filename = row[2]
+
+        local file_path = API.storage_dir .. "/" .. key .. "/" .. filename
+        Annotations.createAnnotations(file_path, key, API.createItems)
+        row = stmt:step(row)
+
+        if progress_callback ~= nil and (i == 1 or i % 10 == 0 or i == item_count) then
+            progress_callback(string.format(_("Syncing annotations of file %i/%i"), i, item_count))
+        end
+
+        i = i + 1
+    end
+    stmt:close()
+end
+
+-- Create a whole range of items.
+-- Returns an array with a status code per item
+function API.createItems(items)
+    -- up to 50 items can be created with one request, see https://www.zotero.org/support/dev/web_api/v3/write_requests#creating_multiple_objects for details
+    local API_MAX_ITEMS_PER_REQUEST = 50
+    local total_items = #items
+    local total_requests = math.ceil(total_items / API_MAX_ITEMS_PER_REQUEST)
+
+    local created_items = {}
+    for i=1,total_items do
+        table.insert(created_items, nil)
+    end
+
+    local e, api_key, user_id = API.ensureKeyAndID()
+    if e ~= nil then
+        return created_items, e
+    end
+    local headers = API.getHeaders(api_key)
+    local create_url = ("https://api.zotero.org/users/%s/items"):format(user_id)
+
+
+    for request_no=1,total_requests do
+        local request_items = {}
+        local start_item = (request_no - 1) * API_MAX_ITEMS_PER_REQUEST
+        local end_item = math.min(start_item + API_MAX_ITEMS_PER_REQUEST, total_items)
+        for i=start_item,end_item do
+            table.insert(request_items, items[i])
+        end
+
+        local request_json = JSON.encode(request_items)
+        headers["if-unmodified-since"] = API.getLibraryVersion()
+        local response = {}
+        print(("POST request to %s with headers %s, body:\n%s"):format(create_url, JSON.encode(headers), request_json))
+        local r,c, response_headers = http.request {
+            method = "POST",
+            url = create_url,
+            headers = headers,
+            sink = ltn12.sink.table(response),
+            source = ltn12.source.string(request_json)
+        }
+        e = API.verifyResponse(r, c)
+        if e ~= nil then return created_items, e end
+
+        local content = table.concat(response, "")
+        local ok, result = pcall(JSON.decode, content)
+        if not ok then
+            return created_items, "Error: failed to parse JSON in response to annotation creation request"
+        end
+        print("Response headers: " .. JSON.encode(response_headers) .. "\n")
+        print("Response: \n" .. content)
+
+
+
+        local new_library_version = response_headers["Last-Modified-Version"]
+        if new_library_version ~= nil then
+            API.setLibraryVersion(new_library_version)
+        else
+            print("Z: could not update library version from create request, got " .. tostring(new_library_version))
+        end
+
+        for k,v in pairs(result["successful"]) do
+            local index = start_item + tonumber(k) + 1
+            created_items[index] = v
+        end
+
+        for k,v in pairs(result["unchanged"]) do
+            local index = start_item + tonumber(k) + 1
+            local zotero_key = v
+            created_items[index] = {
+                ["key"] = zotero_key
+            }
+        end
+    end
+
+    return created_items, nil
+end
+
 
 return API
