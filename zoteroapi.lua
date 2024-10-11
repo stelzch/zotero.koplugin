@@ -855,20 +855,31 @@ function API.syncItemAnnotations(itemKey)
         local pageDims = document:getNativePageDimensions(1)
         print("Page dimensions: ", JSON.encode(pageDims))
         document:close()
-
-        for annotationKey, annotation in pairs(zoteroAnnotations) do
-            table.insert(koAnnotations, zotero2KoreaderAnnotation(annotation, pageDims.h))
+        
+        if #koreaderAnnotations == 0 then
+            for annotationKey, annotation in pairs(zoteroAnnotations) do
+                table.insert(koreaderAnnotations, zotero2KoreaderAnnotation(annotation, pageDims.h))
+            end
+        else
+            for itemKey, itemInfo in pairs(zoteroItems) do
+                if itemInfo.status == "newerRemote" then
+                    koreaderAnnotations[itemInfo.position] = zotero2KoreaderAnnotation(zoteroAnnotations[itemKey], pageDims.h)
+                elseif itemInfo.status == "deletedRemote" then
+                    koreaderAnnotations[itemInfo.position] = nil
+                elseif itemInfo.status == "newRemote" then
+                    table.insert(koreaderAnnotations, zotero2KoreaderAnnotation(zoteroAnnotations[itemKey], pageDims.h))
+                end
+            end
         end
-
         -- Use zoteroSortIndex for sorting.
         -- No idea how this index is generated, but this seems to work...
         local comparator = function(a,b)
             return (a["zoteroSortIndex"] < b["zoteroSortIndex"])
         end
-        table.sort(koAnnotations, comparator)
+        table.sort(koreaderAnnotations, comparator)
 
         -- Write to sdr file
-        docSettings:saveSetting("annotations", koAnnotations)
+        docSettings:saveSetting("annotations", koreaderAnnotations)
 
 --      print(JSON.encode(koAnnotations))          
     end
