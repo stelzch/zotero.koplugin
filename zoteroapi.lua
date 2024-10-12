@@ -793,12 +793,16 @@ function API.syncItemAnnotations(itemKey)
                 --print("KOReader annotation imported from Zotero ", ann.zoteroKey)
                 localZotAnn[ann.zoteroKey] = idx
             else
-                print("Additional KOReader annotation", ann.text)
-                -- make 'fake' sort key
-                koreaderAnnotations[idx].zoteroSortIndex = "0002"
-                print(string.format("%05d|%05d|%05d", ann.page-1, idx,100))
-                table.insert(localKORAnn, idx)
-                localMods = localMods + 1
+                if ann.drawer ~= nil then -- it's a note or highlight
+                    print("Additional KOReader annotation", ann.text)
+                    -- make 'fake' sort key
+                    koreaderAnnotations[idx].zoteroSortIndex = "0002"
+                    print(string.format("%05d|%05d|%05d", ann.page-1, idx, math.floor(ann.pos0.x)))
+                    table.insert(localKORAnn, idx)
+                    localMods = localMods + 1
+                else -- it's a bookmark (or even s/t else?)
+                    print("Ignoring bookmark", ann.text)
+                end
             end
         end
         -- Iterate over local Zotero annotations to check whether they have been changed
