@@ -17,6 +17,7 @@ local ZoteroAPI = require("zoteroapi")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
 local ButtonDialog = require("ui/widget/buttondialog")
 local lfs = require("libs/libkoreader-lfs")
+local logger = require("logger")
 
 
 local DEFAULT_LINES_PER_PAGE = 14
@@ -245,11 +246,11 @@ function Plugin:init()
     xpcall(self.initAPIAndBrowser, self.initError, self)
     self.initialized = true
 
-    print("Z: successfully initialized!")
+    logger.dbg("Zotero: successfully initialized!")
 end
 
 function Plugin:initError(e)
-    print("Could not initialize Zotero: " .. e)
+    logger.err("Could not initialize Zotero: " .. e)
 end
 
 function Plugin:checkInitialized()
@@ -286,7 +287,7 @@ function Plugin:initAPIAndBrowser()
         self.browser
     }
     self.browser.show_parent = self.zotero_dialog
-    print("Z: Browser initialized")
+    logger.dbg("Zotero: Browser initialized")
 end
 
 function Plugin:addToMainMenu(menu_items)
@@ -478,7 +479,6 @@ end
 
 function Plugin:setItemsPerPage()
     assert(ZoteroAPI.getSettings ~= nil)
-	print("setting to " .. self:getItemsPerPage())
     self.items_per_page_dialog = SpinWidget:new {
         title_text = _("Set items per page"),
         value = self:getItemsPerPage(),

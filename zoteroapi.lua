@@ -2,12 +2,11 @@ local BaseUtil = require("ffi/util")
 local LuaSettings = require("luasettings")
 local http = require("socket.http")
 local ltn12 = require("ltn12")
-local https = require("ssl.https")
 local JSON = require("json")
 local lfs = require("libs/libkoreader-lfs")
-local DocSettings = require("docsettings")
 local sha2 = require("ffi/sha2")
 local SQ3 = require("lua-ljsqlite3/init")
+local logger = require("logger")
 local Annotations = require("annotations")
 local _ = require("gettext")
 
@@ -252,9 +251,7 @@ function API.openDB()
         return API.db
     else
         API.db = SQ3.open(API.db_path)
-        print("Z: openDB opened")
         API.db:exec(ZOTERO_CREATE_VIEWS)
-        print("Z: created views")
         return API.db
     end
 
@@ -269,27 +266,22 @@ function API.closeDB()
 end
 
 function API.init(zotero_dir)
-    print("Z: initializing API")
     API.zotero_dir = zotero_dir
     local settings_path = BaseUtil.joinPath(API.zotero_dir, "meta.lua")
     API.settings = LuaSettings:open(settings_path)
-    print("Z: settings opened")
 
     API.storage_dir = BaseUtil.joinPath(API.zotero_dir, "storage")
     if not file_exists(API.storage_dir) then
         lfs.mkdir(API.storage_dir)
     end
 
-    print("Z: storage dir" .. API.storage_dir)
+    logger.dbg("Zotero: storage dir" .. API.storage_dir)
 
     API.db_path = BaseUtil.joinPath(API.zotero_dir, "zotero.db")
-    print("Z: opening db path ", API.db_path)
+    logger.dbg("Zotero: opening db path ", API.db_path)
     local db = API.openDB()
-    print("Z: DB opened")
     db:exec(ZOTERO_DB_SCHEMA)
-    print("Z: DB init schema")
     db:exec(ZOTERO_CREATE_VIEWS)
-    print("Z: view init")
 end
 
 function API.getAPIKey()
@@ -416,7 +408,7 @@ function API.verifyResponse(r, c)
 end
 
 function API.fetchCollectionSize(collection_url, headers)
-    print("Z: Determining size of '" .. collection_url .. "'")
+    logger.dbg("Zotero: Determining size of '" .. collection_url .. "'")
     local r, c, h = http.request {
         method = "HEAD",
         url = collection_url,
@@ -448,14 +440,13 @@ function API.fetchCollectionPaginated(collection_url, headers, callback)
     local collection_size, e = API.fetchCollectionSize(collection_url, headers)
     if e ~= nil then return nil, e end
 
-    print(("Fetching %s items."):format(collection_size))
+    logger.dbg(("Zotero: Fetching %s items."):format(collection_size))
     -- The API returns the results in pages with 100 entries each, loop accordingly.
     local items = {}
     local library_version = 0
     local step_size = 100
     for item_nr = 0, collection_size, step_size do
         local page_url = ("%s&limit=%i&start=%i"):format(collection_url, step_size, item_nr)
-        print("Fetching page ", item_nr, page_url)
 
         local page_data = {}
         local r, c, h = http.request {
@@ -526,7 +517,6 @@ function API.syncAllItems(progress_callback)
 
     local e, api_key, user_id = API.ensureKeyAndID()
     if e ~= nil then return e end
-    print(e, api_key, user_id)
 
     local headers = API.getHeaders(api_key)
     local items_url = ("https://api.zotero.org/users/%s/items?since=%s&includeTrashed=true"):format(user_id, since)
@@ -534,7 +524,6 @@ function API.syncAllItems(progress_callback)
 
     -- Sync library collections
     r, e = API.fetchCollectionPaginated(collections_url, headers, function(partial_entries, percentage)
-        print("Received callback, processing entries: " .. #partial_entries)
         callback(string.format("Syncing collections %.0f%%", percentage))
         for i = 1, #partial_entries do
             -- Ruthlessly update our local items
@@ -549,7 +538,6 @@ function API.syncAllItems(progress_callback)
     -- Sync library items
     local r, e
     r, e = API.fetchCollectionPaginated(items_url, headers, function(partial_entries, percentage)
-        print("Received callback, processing entries: " .. #partial_entries)
         callback(string.format("Syncing items %.0f%%", percentage))
         for i = 1, #partial_entries do
             -- Ruthlessly update our local items
@@ -661,7 +649,7 @@ function API.downloadAndGetPath(key, download_callback)
         end
     else
         local url = "https://api.zotero.org/users/" .. API.getUserID() .. "/items/" .. key .. "/file"
-        print("Fetching " .. url)
+        logger.dbg("Zotero: fetching " .. url)
 
         local r, c, h = http.request {
             url = url,
@@ -687,7 +675,7 @@ function API.downloadWebDAV(key, targetDir, targetPath)
     local url = API.getWebDAVUrl() .. "/" .. key .. ".zip"
     local headers = API.getWebDAVHeaders()
     local zipPath = targetDir .. "/" .. key .. ".zip"
-    print("Fetching URL " .. url)
+    logger.dbg("Zotero: fetching URL " .. url)
     local r, c, h = http.request {
         method = "GET",
         url = url,
@@ -702,7 +690,7 @@ function API.downloadWebDAV(key, targetDir, targetPath)
 
     -- Zotero WebDAV storage packs documents inside a zipfile
     local zip_cmd = "unzip -qq '" .. zipPath .. "' -d '" .. targetDir .. "'"
-    print("Unzipping with " .. zip_cmd)
+    logger.dbg("Zotero: unzipping with " .. zip_cmd)
     local zip_result = os.execute(zip_cmd)
     if zip_result then
         return targetPath
@@ -710,7 +698,10 @@ function API.downloadWebDAV(key, targetDir, targetPath)
         return nil, "Unzipping failed"
     end
 
-    local remove_result = os.remove(zipPath)
+    local remove_result, e, ecode = os.remove(zipPath)
+    if remove_result == nil then
+        logger.err(("Zotero: failed to remove zip file %s, error %s"):format(zipPath, e))
+    end
 end
 
 function API.getWebDAVHeaders()
@@ -774,8 +765,6 @@ function API.displayCollection(key)
             ["type"] = row[3],
         })
 
-        print(tostring(row[2]) .. " type = " .. (row[3] or 'nil'))
-
         row = stmt:step(row)
     end
     stmt:close()
@@ -801,8 +790,6 @@ function API.displaySearchResults(query)
             ["text"] = row[2],
             ["type"] = row[3],
         })
-
-        print(tostring(row[2]) .. " type = " .. (row[3] or 'nil'))
 
         row = stmt:step(row)
     end
@@ -925,7 +912,7 @@ function API.createItems(items)
         local request_json = JSON.encode(request_items)
         headers["if-unmodified-since"] = API.getLibraryVersion()
         local response = {}
-        print(("POST request to %s with headers %s, body:\n%s"):format(create_url, JSON.encode(headers), request_json))
+        logger.dbg(("Zotero: POST request to %s, body:\n%s"):format(create_url, request_json))
         local r,c, response_headers = http.request {
             method = "POST",
             url = create_url,
@@ -941,16 +928,12 @@ function API.createItems(items)
         if not ok then
             return created_items, "Error: failed to parse JSON in response to annotation creation request"
         end
-        print("Response headers: " .. JSON.encode(response_headers) .. "\n")
-        print("Response: \n" .. content)
-
-
 
         local new_library_version = response_headers["Last-Modified-Version"]
         if new_library_version ~= nil then
             API.setLibraryVersion(new_library_version)
         else
-            print("Z: could not update library version from create request, got " .. tostring(new_library_version))
+            logger.err("Z: could not update library version from create request, got " .. tostring(new_library_version))
         end
 
         for k,v in pairs(result["successful"]) do
