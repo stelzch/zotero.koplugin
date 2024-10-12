@@ -119,6 +119,10 @@ function Annotations.convertKOReaderToZotero(annotation, page_height, parent_key
     local type = Annotations.annotationTypeKOReaderToZotero(annotation.drawer)
     local rects = {}
 
+    -- Coordinate systems of KOReader and Zotero are flipped. On KOReader, the
+    -- y-axis extends towards the bottom whereas on Zotero the y-axis extends
+    -- towards the bottom.
+    -- Therefore, we need to transform coordinates before uploading them to Zotero
     for _, pbox in ipairs(annotation.pboxes) do
         local x1 = pbox.x
         local y1 = page_height - pbox.y - pbox.h
