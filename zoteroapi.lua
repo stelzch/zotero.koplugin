@@ -9,6 +9,8 @@ local DocSettings = require("docsettings")
 local sha2 = require("ffi/sha2")
 local Geom = require("ui/geometry")
 
+--local localDeleteStr <const> = "deletedLocal"
+
 -- Functions expect config parameter, a lua table with the following keys:
 -- zotero_dir: Path to a directory where cache files will be stored
 -- api_key: self-explanatory
@@ -711,6 +713,26 @@ function API.syncModifiedItems()
     local modItems = API.getModifiedItems()
 end
 
+function getPageDimensions(filePath)
+
+    -- We need to get page height of pdf document to be able to convert Zotero position to KOReader positions
+    -- Open document to get the dimensions of the first page
+    local DocumentRegistry = require("document/documentregistry")	
+    local provider = DocumentRegistry:getProvider(filePath)	
+    local document = DocumentRegistry:openDocument(filePath, provider)
+    if not document then
+        UIManager:show(InfoMessage:new{
+            text = _("No reader engine for this file or invalid file.")
+        })
+        return
+    end
+    -- Assume all pages have the same dimensions and thus just take first page:
+    local pageDims = document:getNativePageDimensions(1)
+    print("Page dimensions: ", JSON.encode(pageDims))
+    document:close()
+    return pageDims
+end
+
 -- Sync annotations for specified item from Zotero with sdr folder
 function API.syncItemAnnotations(itemKey)
     local items = API.getItems()
@@ -720,7 +742,7 @@ function API.syncItemAnnotations(itemKey)
         return "Error: could not find item"
     end
     
-    -- (Relevant) Zotero annotation keys (currentlly only for highlights)
+    -- (Relevant) Zotero annotation keys (currently only for highlights)
     local zoteroItems = {}
     local updateNeeded = true
 
@@ -734,6 +756,7 @@ function API.syncItemAnnotations(itemKey)
     if localLibVersion >= libVersion then 
         print("No need to check Zotero database") 
         zoteroItems = settings:readSetting("zoteroItems")
+        -- the next lines does not really work here. But not really needed?
         zotCount = #zoteroItems
         updateNeeded = false
     else
@@ -762,6 +785,7 @@ function API.syncItemAnnotations(itemKey)
 
     local localZotAnn = {}
     local localKORAnn = {}
+    local localMods = 0
     if #koreaderAnnotations > 0 then
         -- Iterate over KOReader annotations to check which ones are zotero items
         for idx, ann in ipairs(koreaderAnnotations) do
@@ -770,7 +794,11 @@ function API.syncItemAnnotations(itemKey)
                 localZotAnn[ann.zoteroKey] = idx
             else
                 print("Additional KOReader annotation", ann.text)
+                -- make 'fake' sort key
+                koreaderAnnotations[idx].zoteroSortIndex = "0002"
+                print(string.format("%05d|%05d|%05d", ann.page-1, idx,100))
                 table.insert(localKORAnn, idx)
+                localMods = localMods + 1
             end
         end
         -- Iterate over local Zotero annotations to check whether they have been changed
@@ -790,6 +818,7 @@ function API.syncItemAnnotations(itemKey)
                     else
                         print("Locally modified note "..key) 
                         zoteroItems[key].status = "newerLocal" 
+                        localMods = localMods + 1
                     end                   
                 end
             else
@@ -805,56 +834,41 @@ function API.syncItemAnnotations(itemKey)
                 else
                     print("Annotation has been deleted locally: "..key)
                     zoteroItems[key].status = "deletedLocal"
+                    localMods = localMods + 1
                 end
             end        
         end
         print("Zotero annotations ", JSON.encode(zoteroItems))
     end
-    --for annotationKey, annotation in ipairs(koreaderAnnotations) do
-        --print("KOReader ", annotationKey)
-        --if type(annotationKey) == "string" then
-            --local zoteroAnnotation = zoteroAnnotations[annotationKey]
-            --if annotation.bookmark.zoteroVersion == zoteroAnnotation.version and
-                --annotation.bookmark.zoteroKey ~= nil then
-                ---- The annotation already has an assigned Zotero key, just update the Zotero
-                --local updated = modifiedZoteroAnnotation(annotation)
-                --API.addModifiedItem(updated)
-                --print("Updating zotero annotation ", annotation.bookmark.notes, annotation.bookmark.text)
-            --else
-                ---- The KOReader version is older, we keep the Zotero version
-                --print("Zotero is newer: ", zoteroAnnotation.data.annotationText)
-            --end
-        --else
-            ---- Create a new zotero annotation
-            --local new = newZoteroAnnotation(annotation, itemKey)
-            --print("Creating zotero annotation ", JSON.encode(new))
-            --API.addModifiedItem(new)
-        --end
-    --end
 
-    --local highlight = docSettings:readSetting("highlight", {})
-    --local bookmark = docSettings:readSetting("bookmarks", {})
-    --local modItems = API.getModifiedItems()
-
-    local koAnnotations = {}
+    -- Need to decide what to do in case there are local changes
+    if localMods > 0 then
+        print(localMods.." locally modified annotations")
+    end
+    
+    --local koAnnotations = {}
     if updateNeeded and zotCount > 0 then
         --print("Zotero annotations: ", JSON.encode(zoteroAnnotations))
         
-        -- We need to get page height of pdf document to be able to convert Zotero position to KOReader positions
-        -- Open document to get the dimensions of the first page
-        local DocumentRegistry = require("document/documentregistry")	
-        local provider = DocumentRegistry:getProvider(filePath)	
-        local document = DocumentRegistry:openDocument(filePath, provider)
-        if not document then
-            UIManager:show(InfoMessage:new{
-                text = _("No reader engine for this file or invalid file.")
-            })
-            return
+        local pageDims = settings:readSetting("pageDimensions")
+        if pageDims == nil then
+            pageDims = getPageDimensions(filePath)
         end
-        -- Assume all pages have the same dimensions and thus just take first page:
-        local pageDims = document:getNativePageDimensions(1)
-        print("Page dimensions: ", JSON.encode(pageDims))
-        document:close()
+        ---- We need to get page height of pdf document to be able to convert Zotero position to KOReader positions
+        ---- Open document to get the dimensions of the first page
+        --local DocumentRegistry = require("document/documentregistry")	
+        --local provider = DocumentRegistry:getProvider(filePath)	
+        --local document = DocumentRegistry:openDocument(filePath, provider)
+        --if not document then
+            --UIManager:show(InfoMessage:new{
+                --text = _("No reader engine for this file or invalid file.")
+            --})
+            --return
+        --end
+        ---- Assume all pages have the same dimensions and thus just take first page:
+        --local pageDims = document:getNativePageDimensions(1)
+        --print("Page dimensions: ", JSON.encode(pageDims))
+        --document:close()
         
         if #koreaderAnnotations == 0 then
             for annotationKey, annotation in pairs(zoteroAnnotations) do
@@ -871,6 +885,10 @@ function API.syncItemAnnotations(itemKey)
                 end
             end
         end
+        
+        -- Unsorted annotations seem to lead to spurious results when displaying notes!
+        -- So seems important to have them in the right order before saving them
+        
         -- Use zoteroSortIndex for sorting.
         -- No idea how this index is generated, but this seems to work...
         local comparator = function(a,b)
@@ -880,6 +898,8 @@ function API.syncItemAnnotations(itemKey)
 
         -- Write to sdr file
         docSettings:saveSetting("annotations", koreaderAnnotations)
+        -- Save page dimensions for future use
+        settings:saveSetting("pageDimensions", pageDims)
 
 --      print(JSON.encode(koAnnotations))          
     end
