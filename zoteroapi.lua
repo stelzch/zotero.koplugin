@@ -8,8 +8,7 @@ local lfs = require("libs/libkoreader-lfs")
 local DocSettings = require("docsettings")
 local sha2 = require("ffi/sha2")
 local Geom = require("ui/geometry")
-
---local localDeleteStr <const> = "deletedLocal"
+local logger = require("logger")
 
 -- Functions expect config parameter, a lua table with the following keys:
 -- zotero_dir: Path to a directory where cache files will be stored
@@ -22,6 +21,8 @@ local Geom = require("ui/geometry")
 -- /meta.lua: Metadata containing library version, items etc.
 
 local API = {}
+
+--logger:setLevel(logger.levels.dbg)
 
 local SUPPORTED_MEDIA_TYPES = {
     [1] = "application/pdf",
@@ -734,7 +735,7 @@ function getPageDimensions(filePath)
 end
 
 -- Sync annotations for specified item from Zotero with sdr folder
-function API.syncItemAnnotations(itemKey)
+function API.syncItemAnnotations(itemKey, annotation_callback)
     local items = API.getItems()
     local fileDir, filePath = API.getDirAndPath(itemKey)
 
@@ -746,7 +747,6 @@ function API.syncItemAnnotations(itemKey)
     local zoteroItems = {}
     local updateNeeded = true
 
-    local zoteroAnnotations = {}
     local zotCount = 0
     
     local settings = LuaSettings:open(BaseUtil.joinPath(fileDir, ".zotero.metadata.lua"))    
@@ -756,8 +756,6 @@ function API.syncItemAnnotations(itemKey)
     if localLibVersion >= libVersion then 
         print("No need to check Zotero database") 
         zoteroItems = settings:readSetting("zoteroItems")
-        -- the next lines does not really work here. But not really needed?
-        zotCount = #zoteroItems
         updateNeeded = false
     else
         print("Checking item\'s annotations in Zotero database")
@@ -766,14 +764,16 @@ function API.syncItemAnnotations(itemKey)
             if annotation.data.parentItem == itemKey
                 and annotation.data.itemType == "annotation"
                 and annotation.data.annotationType == "highlight" then
-                zoteroAnnotations[annotationKey] = annotation
-                --table.insert(zoteroItems, { ["key"] = annotationKey })
                 zoteroItems[annotationKey] = { ["status"] = "newerRemote" }
                 zotCount = zotCount + 1
             end
         end
+        if zotCount > 0 then
+            print("Found "..zotCount.." zotero annotations.")
+        else  -- nothing to update!
+            updateNeeded = false
+        end
     end
-    print("Found "..zotCount.." zotero annotations.")
     
     -- Add them to the docsettings 
     -- NOTE: Currently annotations that are not already there just get overwritten
@@ -786,6 +786,7 @@ function API.syncItemAnnotations(itemKey)
     local localZotAnn = {}
     local localKORAnn = {}
     local localMods = 0
+    -- If there are locally stored KOReader annotations, check them to identify Zotero annotations
     if #koreaderAnnotations > 0 then
         -- Iterate over KOReader annotations to check which ones are zotero items
         for idx, ann in ipairs(koreaderAnnotations) do
@@ -794,17 +795,21 @@ function API.syncItemAnnotations(itemKey)
                 localZotAnn[ann.zoteroKey] = idx
             else
                 if ann.drawer ~= nil then -- it's a note or highlight
-                    print("Additional KOReader annotation", ann.text)
+                    logger.dbg("Zotero: Additional KOReader annotation: "..ann.text)
                     -- make 'fake' sort key
-                    koreaderAnnotations[idx].zoteroSortIndex = "0002"
-                    print(string.format("%05d|%05d|%05d", ann.page-1, idx, math.floor(ann.pos0.x)))
+                    koreaderAnnotations[idx].zoteroSortIndex = string.format("%05d|%05d|%05d", ann.page-1, idx, math.floor(ann.pos0.x))
+                    --print(koreaderAnnotations[idx].zoteroSortIndex)
                     table.insert(localKORAnn, idx)
                     localMods = localMods + 1
                 else -- it's a bookmark (or even s/t else?)
-                    print("Ignoring bookmark", ann.text)
+                    logger.dbg("Zotero: Ignoring bookmark: "..ann.text)
+                    koreaderAnnotations[idx].zoteroSortIndex = string.format("%05d|%05d|00000", ann.page-1, idx)
                 end
             end
         end
+        
+        -- Deal with local Zotero annotations
+        --
         -- Iterate over local Zotero annotations to check whether they have been changed
         for key, idx in pairs(localZotAnn) do
             local item = items[key]
@@ -830,6 +835,7 @@ function API.syncItemAnnotations(itemKey)
                 zoteroItems[key].status = "deletedRemote"        
             end
         end
+        -- Check with the remote list of annotations to see if there are any new ones or local deletions...
         for key, annInfo in pairs(zoteroItems) do
             if localZotAnn[key] == nil then
                 if items[key].version > localLibVersion then
@@ -843,49 +849,48 @@ function API.syncItemAnnotations(itemKey)
             end        
         end
         print("Zotero annotations ", JSON.encode(zoteroItems))
+    else
+        if zoteroItems ~= nil then updateNeeded = true end
     end
-
     -- Need to decide what to do in case there are local changes
+    -- Maybe have dialogue with choice of discarding, keeping them locally or synching them to Zotero?
+    local action = "keep"
+    if annotation_callback ~= nil then action = annotation_callback() end
+    action = "upload"
+    --action = "discard"
     if localMods > 0 then
         print(localMods.." locally modified annotations")
+        if action == "discard" then  -- delete all local annotations
+            print("Discarding all local changes and revert to Zotero annotations.")
+            koreaderAnnotations = {}
+            updateNeeded = true
+        elseif action == "upload" then
+            print("Zotero upload of changes is not implemented yet! Just keeping changes locally.")
+        else
+            print("Keeping the local changes.")
+        end
     end
     
-    --local koAnnotations = {}
-    if updateNeeded and zotCount > 0 then
-        --print("Zotero annotations: ", JSON.encode(zoteroAnnotations))
-        
+    if updateNeeded then
+        -- We need to get page height of pdf document to be able to convert Zotero position to KOReader positions
         local pageDims = settings:readSetting("pageDimensions")
         if pageDims == nil then
             pageDims = getPageDimensions(filePath)
         end
-        ---- We need to get page height of pdf document to be able to convert Zotero position to KOReader positions
-        ---- Open document to get the dimensions of the first page
-        --local DocumentRegistry = require("document/documentregistry")	
-        --local provider = DocumentRegistry:getProvider(filePath)	
-        --local document = DocumentRegistry:openDocument(filePath, provider)
-        --if not document then
-            --UIManager:show(InfoMessage:new{
-                --text = _("No reader engine for this file or invalid file.")
-            --})
-            --return
-        --end
-        ---- Assume all pages have the same dimensions and thus just take first page:
-        --local pageDims = document:getNativePageDimensions(1)
-        --print("Page dimensions: ", JSON.encode(pageDims))
-        --document:close()
         
         if #koreaderAnnotations == 0 then
-            for annotationKey, annotation in pairs(zoteroAnnotations) do
-                table.insert(koreaderAnnotations, zotero2KoreaderAnnotation(annotation, pageDims.h))
+            for key, annInfo in pairs(zoteroItems) do
+                table.insert(koreaderAnnotations, zotero2KoreaderAnnotation(items[key], pageDims.h))
             end
         else
             for itemKey, itemInfo in pairs(zoteroItems) do
+            print("Updating item ", itemKey, itemInfo.status)
                 if itemInfo.status == "newerRemote" then
-                    koreaderAnnotations[itemInfo.position] = zotero2KoreaderAnnotation(zoteroAnnotations[itemKey], pageDims.h)
+                    koreaderAnnotations[itemInfo.position] = zotero2KoreaderAnnotation(items[itemKey], pageDims.h)
                 elseif itemInfo.status == "deletedRemote" then
                     koreaderAnnotations[itemInfo.position] = nil
                 elseif itemInfo.status == "newRemote" then
-                    table.insert(koreaderAnnotations, zotero2KoreaderAnnotation(zoteroAnnotations[itemKey], pageDims.h))
+                    table.insert(koreaderAnnotations, zotero2KoreaderAnnotation(items[itemKey], pageDims.h))
                 end
             end
         end
@@ -908,7 +913,6 @@ function API.syncItemAnnotations(itemKey)
 --      print(JSON.encode(koAnnotations))          
     end
     
---    settings:saveSetting("annotations", koAnnotations)
     settings:saveSetting("zoteroItems", zoteroItems)
     settings:saveSetting("libraryVersion", tonumber(API.getLibraryVersion()))
     settings:flush() 
