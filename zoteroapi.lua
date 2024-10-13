@@ -351,8 +351,8 @@ function API.syncAllItems()
     print(e, api_key, user_id)
 
     local headers = API.getHeaders(api_key)
-    local items_url = ("https://api.zotero.org/users/%s/items?since=%s"):format(user_id, since)
-    local collections_url = ("https://api.zotero.org/users/%s/collections?since=%s"):format(user_id, since)
+    local items_url = ("https://api.zotero.org/users/%s/items?since=%s&includeTrashed=1"):format(user_id, since)
+    local collections_url = ("https://api.zotero.org/users/%s/collections?since=%s&includeTrashed=1"):format(user_id, since)
 
     -- Sync library items
     local items = API.getItems()
@@ -363,9 +363,41 @@ function API.syncAllItems()
             -- Ruthlessly update our local items
             local item = partial_entries[i]
             local key = item.key
-            items[key] = item
+            -- Check if item was deleted.
+            -- Server either sets deleted to true or 1, so we need to check for both
+            if item.data ~= nil and (item.data.deleted == 1 or item.data.deleted == true) then
+                items[key] = nil
+                print("Deleted item: "..key)
+                print(JSON.encode(item))
+                -- This seems sometimes NOT enough: if it is document type it might leave behind its children...
+                --
+                -- Check item.meta.numChildren > 0 and then search for children, grandchildren etc...
+            else
+                items[key] = item
+                --print("Updated item: "..key)
+            end
         end
     end)
+    if e ~= nil then print( e)  end
+    
+    --local deletedItems_url = ("https://api.zotero.org/users/%s/items/trash?since=%s"):format(user_id, since)
+    --local r, e = API.fetchCollectionPaginated(deletedItems_url, headers, function(partial_entries)
+        --print("Received callback, processing entries: " .. #partial_entries)
+        --for i = 1, #partial_entries do
+            ------ Ruthlessly update our local items
+            --local item = partial_entries[i]
+            --local key = item.key
+            ------ Check if item was deleted.
+            ------ Server either sets deleted to true or 1, so we need to check for both
+            ----if item.data ~= nil and (item.data.deleted == 1 or item.data.deleted == true) then
+                ----items[key] = nil
+            --print("Deleted item: "..key)
+            ----else
+                ----items[key] = item
+                ----print("Updated item: "..key)
+            ----end
+        --end
+    --end)
     if e ~= nil then return e end
     API.setItems(items)
 
@@ -377,7 +409,11 @@ function API.syncAllItems()
             -- Ruthlessly update our local items
             local collection = partial_entries[i]
             local key = collection.key
-            collections[key] = collection
+            if collection.data ~= nil and (collection.data.deleted == 1 or collection.data.deleted == true) then
+                collections[key] = nil
+            else
+                collections[key] = collection
+            end
         end
     end)
     if e ~= nil then return e end
@@ -617,7 +653,7 @@ function API.displayCollection(key)
             local displayItem = false
             if key == nil then
             -- We are dealing with the root collection here
-                if #parentItem.data.collections == 0 then 
+                if parentItem.data.collections == nil or #parentItem.data.collections == 0 then 
                 -- this entry is not part of the collection and will be shown as part of the root collection
                     displayItem = true
                 end
