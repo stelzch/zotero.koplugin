@@ -63,6 +63,17 @@ local function file_slurp(path)
     return content
 end
 
+local function keysToString(array) 
+	
+	local s = ''
+	
+	for k, v in pairs(array) do
+		s = s..k..','
+	end
+	if s ~= '' then s = string.sub(s,1,-2) end  -- remove the final comma
+	return s
+end
+
 function API.cutDecimalPlaces(x, num_places)
     local fac = 10^num_places
     return math.floor(x * fac) / fac
@@ -247,6 +258,21 @@ function API.verifyResponse(r, c)
     return nil
 end
 
+function API.verifyKeyAccess()
+    local e, api_key, user_id = API.ensureKeyAndID()
+    local headers = API.getHeaders(api_key)
+    local page_data = {}
+    local r, c, h = https.request {
+        method = "GET",
+        url = "https://api.zotero.org/keys/current",
+        headers = headers,
+        sink = ltn12.sink.table(page_data)
+    }
+    local e = API.verifyResponse(r, c)
+--    local resp = JSON.decode(page_data)
+    print(page_data[1])
+end
+    
 function API.fetchCollectionSize(collection_url, headers)
     print("Determining size of '" .. collection_url .. "'")
     local r, c, h = https.request {
@@ -810,6 +836,9 @@ function API.syncItemAnnotations(itemKey, annotation_callback)
             updateNeeded = false
         end
     end
+    
+    --print("Keys: \""..keysToString(zoteroItems).."\"")
+    API.verifyKeyAccess()
     
     -- Add them to the docsettings 
     -- NOTE: Currently annotations that are not already there just get overwritten
