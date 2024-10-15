@@ -1,6 +1,7 @@
 local BaseUtil = require("ffi/util")
 local LuaSettings = require("luasettings")
 local http = require("socket.http")
+local https = require("ssl.https")
 local ltn12 = require("ltn12")
 local JSON = require("json")
 local lfs = require("libs/libkoreader-lfs")
@@ -366,7 +367,7 @@ function API.checkWebDAV()
     local pass = API.getWebDAVPassword()
     local headers = API.getWebDAVHeaders()
 
-    local b, c, h = http.request {
+    local b, c, h = https.request {
         url = url,
         method = "PROPFIND",
         headers = headers
@@ -409,7 +410,7 @@ end
 
 function API.fetchCollectionSize(collection_url, headers)
     logger.dbg("Zotero: Determining size of '" .. collection_url .. "'")
-    local r, c, h = http.request {
+    local r, c, h = https.request {
         method = "HEAD",
         url = collection_url,
         headers = headers
@@ -449,7 +450,7 @@ function API.fetchCollectionPaginated(collection_url, headers, callback)
         local page_url = ("%s&limit=%i&start=%i"):format(collection_url, step_size, item_nr)
 
         local page_data = {}
-        local r, c, h = http.request {
+        local r, c, h = https.request {
             method = "GET",
             url = page_url,
             headers = headers,
@@ -651,10 +652,9 @@ function API.downloadAndGetPath(key, download_callback)
         local url = "https://api.zotero.org/users/" .. API.getUserID() .. "/items/" .. key .. "/file"
         logger.dbg("Zotero: fetching " .. url)
 
-        local r, c, h = http.request {
+        local r, c, h = https.request {
             url = url,
             headers = API.getHeaders(api_key),
-            redirect = true,
             sink = ltn12.sink.file(io.open(targetPath, "wb"))
         }
 
@@ -676,11 +676,10 @@ function API.downloadWebDAV(key, targetDir, targetPath)
     local headers = API.getWebDAVHeaders()
     local zipPath = targetDir .. "/" .. key .. ".zip"
     logger.dbg("Zotero: fetching URL " .. url)
-    local r, c, h = http.request {
+    local r, c, h = https.request {
         method = "GET",
         url = url,
         headers = headers,
-        redirect = true,
         sink = ltn12.sink.file(io.open(zipPath, "wb"))
     }
 
@@ -913,7 +912,7 @@ function API.createItems(items)
         headers["if-unmodified-since"] = API.getLibraryVersion()
         local response = {}
         logger.dbg(("Zotero: POST request to %s, body:\n%s"):format(create_url, request_json))
-        local r,c, response_headers = http.request {
+        local r,c, response_headers = https.request {
             method = "POST",
             url = create_url,
             headers = headers,
