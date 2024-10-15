@@ -1,37 +1,215 @@
 local BaseUtil = require("ffi/util")
 local LuaSettings = require("luasettings")
---local http = require("socket.http")
+local http = require("socket.http")
 local ltn12 = require("ltn12")
-local https = require("ssl.https")
 local JSON = require("json")
 local lfs = require("libs/libkoreader-lfs")
-local DocSettings = require("docsettings")
 local sha2 = require("ffi/sha2")
-local Geom = require("ui/geometry")
+local SQ3 = require("lua-ljsqlite3/init")
 local logger = require("logger")
+local Annotations = require("annotations")
+local _ = require("gettext")
 
 -- Functions expect config parameter, a lua table with the following keys:
 -- zotero_dir: Path to a directory where cache files will be stored
 -- api_key: self-explanatory
 --
 -- Directory layout of zoteroapi
--- /items.json: Contains all items
+-- /zotero.db: SQLite3 database that contains JSON items & collections
 -- /storage/<KEY>/filename.pdf: Actual PDF files
 -- /storage/<KEY>/version: Version number of downloaded attachment
 -- /meta.lua: Metadata containing library version, items etc.
 
 local API = {}
 
---logger:setLevel(logger.levels.dbg)
-
 local SUPPORTED_MEDIA_TYPES = {
     [1] = "application/pdf",
---    [2] = "application/epub+zip"
+    [2] = "application/epub+zip",
+    [3] = "text/html"
 }
 
-local function joinTables(target, source)
-    return table.move(source, 1, #source, #target + 1, target)
-end
+local ZOTERO_DB_SCHEMA = [[
+CREATE TABLE IF NOT EXISTS items (
+    key TEXT PRIMARY KEY,
+    value BLOB
+);
+CREATE TABLE IF NOT EXISTS collections (
+    key TEXT PRIMARY KEY,
+    value BLOB
+);
+CREATE TABLE IF NOT EXISTS offline_collections(
+    key TEXT PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS attachment_versions(
+    key TEXT PRIMARY KEY,
+    version INTEGER
+);
+]]
+
+local ZOTERO_CREATE_VIEWS = [[ 
+CREATE TEMPORARY TABLE IF NOT EXISTS supported_media_types (mime TEXT);
+INSERT INTO supported_media_types(mime) VALUES ('application/pdf'), ('application/epub+zip'), ('text/html') ON CONFLICT DO NOTHING;
+
+CREATE TEMPORARY TABLE IF NOT EXISTS supported_link_types (type TEXT);
+INSERT INTO supported_link_types(type) VALUES ('imported_file'), ('imported_url') ON CONFLICT DO NOTHING;
+
+-- create view that holds metadata of the parent item. if it does not exist, it is equal to the item itself
+CREATE TEMPORARY VIEW IF NOT EXISTS attachment_data AS
+SELECT items.key AS key, items.value AS value, parents.key AS parent_key, coalesce(parents.value, items.value) AS parent_value
+FROM items
+LEFT JOIN items AS parents ON jsonb_extract(items.value, '$.data.parentItem') = parents.key
+WHERE
+(jsonb_extract(items.value, '$.data.itemType')  = 'attachment');
+
+
+CREATE TEMPORARY VIEW IF NOT EXISTS item_download_queue AS
+-- A collection is a offline collection if it is in the respective table or any of its parent collections are 
+-- in the respective table
+WITH RECURSIVE collection_hierarchy(key) AS
+ (SELECT key FROM offline_collections -- starting values are all collections inside the offline_collections table
+  UNION
+  SELECT collections.key              -- select all other keys of collections
+  FROM collections, collection_hierarchy 
+  WHERE jsonb_extract(collections.value, '$.data.parentCollection') = collection_hierarchy.key) -- whose parentCollection is the collection we just inserted
+SELECT attachment_data.key FROM attachment_data
+LEFT JOIN attachment_versions ON attachment_data.key = attachment_versions.key
+WHERE
+-- must be an attachment with supported media type
+(jsonb_extract(value, '$.data.itemType') = 'attachment') AND
+(jsonb_extract(value, '$.data.linkMode') IN (SELECT type FROM supported_link_types)) AND
+(jsonb_extract(value, '$.data.contentType') IN (SELECT mime FROM supported_media_types)) AND
+-- the item may not be deleted
+(jsonb_extract(value, '$.data.deleted') IS NOT 1)
+-- and must belong to a collection in the offline collection hierarchy
+AND EXISTS (SELECT collection_hierarchy.key FROM collection_hierarchy INTERSECT SELECT value FROM json_each(jsonb_extract(attachment_data.parent_value, '$.data.collections')))
+-- and local version must be lower than remote version (otherwise its considered up-to-date)
+AND coalesce((SELECT version FROM attachment_versions WHERE attachment_versions.key = attachment_data.key), 0) < jsonb_extract(attachment_data.value, '$.version');
+
+-- select all pdf attachments present locally
+CREATE TEMPORARY VIEW IF NOT EXISTS local_pdf_items AS
+SELECT
+    items.key AS key,
+    jsonb_extract(items.value, '$.data.filename') AS filename
+FROM attachment_versions
+LEFT JOIN items ON attachment_versions.key = items.key
+WHERE
+(jsonb_extract(items.value, '$.data.linkMode') IN (SELECT type FROM supported_link_types)) AND
+(jsonb_extract(items.value, '$.data.contentType') = 'application/pdf');
+]]
+
+local ZOTERO_GET_DOWNLOAD_QUEUE = [[
+select
+    item_download_queue.key,
+    jsonb_extract(items.value, '$.data.filename') as filename
+from item_download_queue
+left join items on items.key = item_download_queue.key;
+]]
+
+local ZOTERO_GET_DOWNLOAD_QUEUE_SIZE = [[ SELECT COUNT(*) FROM item_download_queue; ]]
+
+local ZOTERO_GET_LOCAL_PDF_ITEMS = [[ SELECT * FROM local_pdf_items; ]]
+
+local ZOTERO_GET_LOCAL_PDF_ITEMS_SIZE = [[ SELECT COUNT(*) FROM local_pdf_items; ]]
+
+local ZOTERO_DB_UPDATE_ITEM = [[
+INSERT INTO items(key, value) VALUES(?,jsonb(?)) ON CONFLICT DO UPDATE SET value = excluded.value;
+]]
+
+local ZOTERO_DB_UPDATE_COLLECTION = [[
+INSERT INTO collections(key, value) VALUES(?,jsonb(?)) ON CONFLICT DO UPDATE SET value = excluded.value;
+]]
+
+local ZOTERO_DB_DELETE = [[
+DELETE FROM items;
+DELETE FROM collections;
+DELETE FROM offline_collections;
+DELETE FROM attachment_versions;
+PRAGMA user_version = 0;
+]]
+
+local ZOTERO_GET_DB_VERSION = [[ PRAGMA user_version; ]]
+
+local ZOTERO_GET_ITEM = [[ SELECT json(items.value) FROM items WHERE key = ?; ]]
+
+local ZOTERO_GET_OFFLINE_COLLECTION = [[ SELECT key FROM offline_collections WHERE key = ?; ]]
+local ZOTERO_ADD_OFFLINE_COLLECTION = [[ INSERT INTO offline_collections(key) VALUES(?); ]]
+local ZOTERO_REMOVE_OFFLINE_COLLECTION = [[ DELETE FROM offline_collections WHERE key = ?; ]]
+
+local ZOTERO_QUERY_ITEMS = [[
+SELECT key, name, type FROM (SELECT
+    key,
+    jsonb_extract(value, '$.data.name') || '/' AS name,
+    jsonb_extract(value, '$.data.parentCollection') AS parent_key,
+    'collection' AS type
+FROM collections
+WHERE (jsonb_extract(value, '$.data.deleted') IS NOT 1) AND ((?1 IS NULL AND parent_key = false) OR (?1 IS NOT NULL AND parent_key = ?1))
+ORDER BY name)
+UNION ALL
+SELECT key, name || title AS name, type FROM (
+SELECT
+    key,
+    jsonb_extract(value, '$.data.title') AS title,
+    -- if possible, prepend creator summary
+    coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') AS name,
+    iif(jsonb_extract(value, '$.data.itemType') = 'attachment', 'attachment', 'item') AS type
+FROM items
+WHERE
+-- don't display items in root collection
+?1 IS NOT NULL
+-- the item should not be deleted
+AND (jsonb_extract(value, '$.data.deleted') IS NOT 1)
+-- the item must belong to the collection we query
+AND (?1 IN (SELECT value FROM json_each(jsonb_extract(items.value, '$.data.collections'))))
+-- and it must either be an attachment or have at least one attachment
+AND (jsonb_extract(value, '$.data.itemType') = 'attachment'
+     OR (SELECT COUNT(key) FROM items AS child
+            WHERE jsonb_extract(child.value, '$.data.parentItem') = items.key
+                  AND jsonb_extract(child.value, '$.data.itemType') = 'attachment'
+                  AND jsonb_extract(child.value, '$.data.deleted') IS NOT 1) > 0)
+ORDER BY title);
+]]
+
+local ZOTERO_SEARCH_ITEMS = [[
+SELECT
+    key,
+    jsonb_extract(value, '$.data.title') AS title,
+    -- if possible, prepend creator summary
+    coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') AS name,
+    iif(jsonb_extract(value, '$.data.itemType') = 'attachment', 'attachment', 'item') AS type
+FROM items
+WHERE
+-- the item should not be deleted
+(jsonb_extract(value, '$.data.deleted') IS NOT 1)
+-- and it must either be an attachment or have at least one attachment
+AND (jsonb_extract(value, '$.data.itemType') = 'attachment'
+     OR (SELECT COUNT(key) FROM items AS child
+            WHERE jsonb_extract(child.value, '$.data.parentItem') = items.key
+                  AND jsonb_extract(child.value, '$.data.itemType') = 'attachment'
+                  AND jsonb_extract(child.value, '$.data.deleted') IS NOT 1) > 0)
+AND title LIKE ?1
+ORDER BY title;
+]]
+
+local ZOTERO_GET_ATTACHMENTS = [[
+SELECT
+key,
+jsonb_extract(value, '$.data.filename') AS filename,
+(jsonb_extract(value, '$.data.contentType') = 'application/pdf') AS is_pdf
+FROM items
+WHERE
+jsonb_extract(value, '$.data.itemType') = 'attachment' AND
+jsonb_extract(value, '$.data.deleted') IS NOT 1 AND
+((key = ?1) OR (jsonb_extract(value, '$.data.parentItem') = ?1))
+ORDER BY is_pdf DESC, filename ASC;
+]]
+
+local ZOTERO_GET_VERSION = [[ SELECT version FROM attachment_versions WHERE key = ?; ]]
+local ZOTERO_SET_VERSION = [[
+INSERT INTO attachment_versions(key,version)
+       VALUES(?,?)
+       ON CONFLICT DO UPDATE SET version = excluded.version;
+]];
 
 local function file_exists(path)
     if path == nil then return nil end
@@ -63,36 +241,47 @@ local function file_slurp(path)
     return content
 end
 
-local function keysToString(array) 
-	
-	local s = ''
-	
-	for k, v in pairs(array) do
-		s = s..k..','
-	end
-	if s ~= '' then s = string.sub(s,1,-2) end  -- remove the final comma
-	return s
-end
-
 function API.cutDecimalPlaces(x, num_places)
     local fac = 10^num_places
     return math.floor(x * fac) / fac
 end
 
+function API.openDB()
+    if API.db ~= nil then
+        return API.db
+    else
+        API.db = SQ3.open(API.db_path)
+        API.db:exec(ZOTERO_CREATE_VIEWS)
+        return API.db
+    end
+
+end
+
+-- TODO: call this at appropriate time
+function API.closeDB()
+    if API.db ~= nil then
+        API.db:close()
+    end
+    API.db = nil
+end
+
 function API.init(zotero_dir)
-    print("Z: initializing API")
     API.zotero_dir = zotero_dir
     local settings_path = BaseUtil.joinPath(API.zotero_dir, "meta.lua")
-    print(settings_path)
     API.settings = LuaSettings:open(settings_path)
-    print("Z: settings opened")
 
     API.storage_dir = BaseUtil.joinPath(API.zotero_dir, "storage")
     if not file_exists(API.storage_dir) then
         lfs.mkdir(API.storage_dir)
     end
 
-    print("Z: storage dir" .. API.storage_dir)
+    logger.dbg("Zotero: storage dir" .. API.storage_dir)
+
+    API.db_path = BaseUtil.joinPath(API.zotero_dir, "zotero.db")
+    logger.dbg("Zotero: opening db path ", API.db_path)
+    local db = API.openDB()
+    db:exec(ZOTERO_DB_SCHEMA)
+    db:exec(ZOTERO_CREATE_VIEWS)
 end
 
 function API.getAPIKey()
@@ -142,11 +331,25 @@ function API.setWebDAVUrl(url)
 end
 
 function API.getLibraryVersion()
-    return API.settings:readSetting("library_version_nr", "0")
+    local db = API.openDB()
+
+    local result, ncol = db:exec(ZOTERO_GET_DB_VERSION)
+    assert(ncol == 1)
+    local version = tonumber(result[1][1])
+
+    return version
 end
 
 function API.setLibraryVersion(version)
-    return API.settings:saveSetting("library_version_nr", version)
+    local v = tonumber(version)
+    local db = API.openDB()
+    local sql = "PRAGMA user_version = " .. tostring(v) .. ";"
+    db:exec(sql)
+end
+
+-- Retrieve underlying settings object to make changes from the outside
+function API.getSettings()
+    return API.settings
 end
 
 
@@ -163,7 +366,7 @@ function API.checkWebDAV()
     local pass = API.getWebDAVPassword()
     local headers = API.getWebDAVHeaders()
 
-    local b, c, h = https.request {
+    local b, c, h = http.request {
         url = url,
         method = "PROPFIND",
         headers = headers
@@ -194,60 +397,6 @@ function API.saveModifiedItems()
     API.settings:flush()
 end
 
-function API.getFilterTag()
-    return API.settings:readSetting("filter_tag", "")
-end
-
-function API.setFilterTag(tag)
-    return API.settings:saveSetting("filter_tag", tag)
-end
-
-function API.setItems(items)
-    API.items = items
-    local f = assert(io.open(BaseUtil.joinPath(API.zotero_dir, "items.json"), "w"))
-    local content = JSON.encode(API.items)
-    f:write(content)
-    f:close()
-end
-
-function API.getItems()
-    if API.items == nil then
-        local path = BaseUtil.joinPath(API.zotero_dir, "items.json")
-        local file_exists = lfs.attributes(path)
-
-        if not file_exists then
-            API.items = {}
-        else
-            API.items = JSON.decode(file_slurp(path))
-        end
-    end
-
-    return API.items
-end
-
-function API.getCollections()
-    if API.collections == nil then
-        local path = BaseUtil.joinPath(API.zotero_dir, "collections.json")
-        local file_exists = lfs.attributes(path)
-
-        if not file_exists then
-            API.collections = {}
-        else
-            API.collections = JSON.decode(file_slurp(path))
-        end
-    end
-
-    return API.collections
-end
-
-function API.setCollections(collections)
-    API.collections = collections
-    local f = assert(io.open(BaseUtil.joinPath(API.zotero_dir, "collections.json"), "w"))
-    local content = JSON.encode(API.collections)
-    f:write(content)
-    f:close()
-end
-
 function API.verifyResponse(r, c)
     if r ~= 1 then
         return ("Error: " .. c)
@@ -258,24 +407,9 @@ function API.verifyResponse(r, c)
     return nil
 end
 
-function API.verifyKeyAccess()
-    local e, api_key, user_id = API.ensureKeyAndID()
-    local headers = API.getHeaders(api_key)
-    local page_data = {}
-    local r, c, h = https.request {
-        method = "GET",
-        url = "https://api.zotero.org/keys/current",
-        headers = headers,
-        sink = ltn12.sink.table(page_data)
-    }
-    local e = API.verifyResponse(r, c)
---    local resp = JSON.decode(page_data)
-    print(page_data[1])
-end
-    
 function API.fetchCollectionSize(collection_url, headers)
-    print("Determining size of '" .. collection_url .. "'")
-    local r, c, h = https.request {
+    logger.dbg("Zotero: Determining size of '" .. collection_url .. "'")
+    local r, c, h = http.request {
         method = "HEAD",
         url = collection_url,
         headers = headers
@@ -298,6 +432,7 @@ end
 --
 -- If a callback is given, it will be called with the entries on each page as they are fetched
 -- and the function will return the version number.
+-- The second parameter to callback is the percentage of completion
 --
 -- If an error occurs, the function will return nil and the error message as second parameter.
 function API.fetchCollectionPaginated(collection_url, headers, callback)
@@ -305,17 +440,16 @@ function API.fetchCollectionPaginated(collection_url, headers, callback)
     local collection_size, e = API.fetchCollectionSize(collection_url, headers)
     if e ~= nil then return nil, e end
 
-    print(("Fetching %s items."):format(collection_size))
+    logger.dbg(("Zotero: Fetching %s items."):format(collection_size))
     -- The API returns the results in pages with 100 entries each, loop accordingly.
     local items = {}
     local library_version = 0
     local step_size = 100
     for item_nr = 0, collection_size, step_size do
         local page_url = ("%s&limit=%i&start=%i"):format(collection_url, step_size, item_nr)
-        print("Fetching page ", item_nr, page_url)
 
         local page_data = {}
-        local r, c, h = https.request {
+        local r, c, h = http.request {
             method = "GET",
             url = page_url,
             headers = headers,
@@ -325,7 +459,7 @@ function API.fetchCollectionPaginated(collection_url, headers, callback)
         library_version = h["last-modified-version"]
 
         local e = API.verifyResponse(r, c)
-        if e ~= nil then return nil, e end
+if e ~= nil then return nil, e end
 
         local content = table.concat(page_data, "")
         local ok, result = pcall(JSON.decode, content)
@@ -333,8 +467,13 @@ function API.fetchCollectionPaginated(collection_url, headers, callback)
             return nil, "Error: failed to parse JSON in response"
         end
 
+        local percentage = 100 * item_nr / collection_size
+        if collection_size == 0 then
+            percentage = 100
+        end
+
         if callback then
-            callback(result)
+            callback(result, percentage)
         else
             -- add items to the list we return in the end
             table.move(result, 1, #result, #items + 1, items)
@@ -369,108 +508,107 @@ function API.getHeaders(api_key)
     }
 end
 
-function API.syncAllItems()
+function API.syncAllItems(progress_callback)
+    local callback = progress_callback or function() end
+    local db = API.openDB()
+    local stmt_update_item = db:prepare(ZOTERO_DB_UPDATE_ITEM)
+    local stmt_update_collection = db:prepare(ZOTERO_DB_UPDATE_COLLECTION)
     local since = API.getLibraryVersion()
 
     local e, api_key, user_id = API.ensureKeyAndID()
     if e ~= nil then return e end
-    print(e, api_key, user_id)
 
     local headers = API.getHeaders(api_key)
-    local items_url = ("https://api.zotero.org/users/%s/items?since=%s&includeTrashed=1"):format(user_id, since)
-    local collections_url = ("https://api.zotero.org/users/%s/collections?since=%s&includeTrashed=1"):format(user_id, since)
-
-    -- Sync library items
-    local items = API.getItems()
-    print("loaded items: " .. #items)
-    local r, e = API.fetchCollectionPaginated(items_url, headers, function(partial_entries)
-        print("Received callback, processing entries: " .. #partial_entries)
-        for i = 1, #partial_entries do
-            -- Ruthlessly update our local items
-            local item = partial_entries[i]
-            local key = item.key
-            -- Check if item was deleted.
-            -- Server either sets deleted to true or 1, so we need to check for both
-            if item.data ~= nil and (item.data.deleted == 1 or item.data.deleted == true) then
-                items[key] = nil
-                print("Deleted item: "..key)
-                print(JSON.encode(item))
-                -- This seems sometimes NOT enough: if it is document type it might leave behind its children...
-                --
-                -- Check item.meta.numChildren > 0 and then search for children, grandchildren etc...
-            else
-                items[key] = item
-                --print("Updated item: "..key)
-            end
-        end
-    end)
-    if e ~= nil then print( e)  end
-    
-    --local deletedItems_url = ("https://api.zotero.org/users/%s/items/trash?since=%s"):format(user_id, since)
-    --local r, e = API.fetchCollectionPaginated(deletedItems_url, headers, function(partial_entries)
-        --print("Received callback, processing entries: " .. #partial_entries)
-        --for i = 1, #partial_entries do
-            ------ Ruthlessly update our local items
-            --local item = partial_entries[i]
-            --local key = item.key
-            ------ Check if item was deleted.
-            ------ Server either sets deleted to true or 1, so we need to check for both
-            ----if item.data ~= nil and (item.data.deleted == 1 or item.data.deleted == true) then
-                ----items[key] = nil
-            --print("Deleted item: "..key)
-            ----else
-                ----items[key] = item
-                ----print("Updated item: "..key)
-            ----end
-        --end
-    --end)
-    if e ~= nil then return e end
-    API.setItems(items)
+    local items_url = ("https://api.zotero.org/users/%s/items?since=%s&includeTrashed=true"):format(user_id, since)
+    local collections_url = ("https://api.zotero.org/users/%s/collections?since=%s&includeTrashed=true"):format(user_id, since)
 
     -- Sync library collections
-    local collections = API.getCollections()
-    local r, e = API.fetchCollectionPaginated(collections_url, headers, function(partial_entries)
-        print("Received callback, processing entries: " .. #partial_entries)
+    r, e = API.fetchCollectionPaginated(collections_url, headers, function(partial_entries, percentage)
+        callback(string.format("Syncing collections %.0f%%", percentage))
         for i = 1, #partial_entries do
             -- Ruthlessly update our local items
             local collection = partial_entries[i]
             local key = collection.key
-            if collection.data ~= nil and (collection.data.deleted == 1 or collection.data.deleted == true) then
-                collections[key] = nil
-            else
-                collections[key] = collection
-            end
+
+            stmt_update_collection:reset():bind(key, JSON.encode(collection)):step()
         end
     end)
     if e ~= nil then return e end
-    API.setCollections(collections)
+
+    -- Sync library items
+    local r, e
+    r, e = API.fetchCollectionPaginated(items_url, headers, function(partial_entries, percentage)
+        callback(string.format("Syncing items %.0f%%", percentage))
+        for i = 1, #partial_entries do
+            -- Ruthlessly update our local items
+            local item = partial_entries[i]
+            local key = item.key
+
+            stmt_update_item:reset():bind(key, JSON.encode(item)):step()
+        end
+    end)
+    if e ~= nil then return e end
 
     API.setLibraryVersion(r)
-    API.settings:flush()
+
+    API.batchDownload(callback)
+    API.syncAnnotations()
 
     return nil
 end
 
--- If a tag is set, ensure all entries actually have that tag and it has not been removed
--- If no tag is set, just remove all deleted entries from the library
-function API.purgeEntries()
-
+function API.getDirAndPath(item)
+    if item == nil then
+        return nil, nil
+    else
+        local dir = BaseUtil.joinPath(API.storage_dir, item.key)
+        local file = BaseUtil.joinPath(dir, item.data.filename)
+        return dir, file
+    end
 end
 
-function API.getDirAndPath(attachmentKey)
-    local items = API.getItems()
-    local attachment = items[attachmentKey]
+function API.getItem(key)
+    local db = API.openDB()
+    local stmt = db:prepare(ZOTERO_GET_ITEM)
+    stmt:reset():bind1(1,key)
 
-    if attachment == nil then
-        return nil, nil
+    local result, nr = stmt:resultset()
+    stmt:close()
+
+    if nr == 0 then
+        return nil
+    else
+        return JSON.decode(result[1][1])
+    end
+end
+
+function API.getItemAttachments(key)
+    local db = API.openDB()
+    local stmt = db:prepare(ZOTERO_GET_ATTACHMENTS)
+    stmt:reset()
+    stmt:bind1(1, key)
+
+    local result, nr = stmt:resultset()
+
+    stmt:close()
+
+    if nr == 0 then
+        return nil
     end
 
---    local targetDir = API.storage_dir .. "/" .. attachment.data.parentItem
-    local targetDir = API.storage_dir .. "/" .. attachmentKey
-    local targetPath = targetDir .. "/" .. attachment.data.filename
+    local items = {}
 
-    return targetDir, targetPath
+    for i=1,nr do
+        table.insert(items, {
+            ["key"] = result[1][i],
+            ["text"] = result[2][i],
+            ["type"] = 'attachment',
+        })
+    end
+
+    return items
 end
+
 
 -- Downloads an attachment file to the correct directory and returns the path.
 -- If the local version is up to date, no network request is made.
@@ -480,25 +618,25 @@ function API.downloadAndGetPath(key, download_callback)
     local e, api_key, user_id = API.ensureKeyAndID()
     if e ~= nil then return nil, e end
 
-    local items = API.getItems()
-    if items[key] == nil then
+    local item = API.getItem(key)
+    if item == nil then
         return nil, "Error: the requested file can not be found in the database"
     end
-    local item = items[key]
 
     if item.data.itemType ~= "attachment" then
         return nil, "Error: this item is not an attachment"
+    elseif item.data.linkMode ~= "imported_file" and item.data.linkMode ~= "imported_url" then
+        return nil, "Error: this item is not a stored attachment"
+    elseif table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType) == false then
+        return nil, "Error: this item has an unsupported content type (" .. item.data.contentType .. ")"
     end
 
-    local attachment = item
-
-    local targetDir, targetPath = API.getDirAndPath(key)
+    local targetDir, targetPath = API.getDirAndPath(item)
     lfs.mkdir(targetDir)
-    
-    local local_version = tonumber(file_slurp(targetDir .. "/version"))
 
-    if local_version ~= nil and local_version >= attachment.version and file_exists(targetPath) then
-        API.syncItemAnnotations(key) -- File is up to date, but check whether annotations need updating
+    local local_version = API.getAttachmentVersion(key)
+
+    if local_version ~= nil and local_version >= item.version and file_exists(targetPath) then
         return targetPath, nil -- all done, local file is up to date
     end
 
@@ -511,30 +649,24 @@ function API.downloadAndGetPath(key, download_callback)
         end
     else
         local url = "https://api.zotero.org/users/" .. API.getUserID() .. "/items/" .. key .. "/file"
-        print("Fetching " .. url)
+        logger.dbg("Zotero: fetching " .. url)
 
-        local r, c, h = https.request {
+        local r, c, h = http.request {
             url = url,
             headers = API.getHeaders(api_key),
---            redirect = true,
+            redirect = true,
             sink = ltn12.sink.file(io.open(targetPath, "wb"))
         }
 
         local e = API.verifyResponse(r, c)
         if e ~= nil then return nil, e end
     end
-    
-    local versionFile = io.open(targetDir .. "/version", "w")
-    if versionFile == nil then
-        return nil, "Could not write version file"
-    end
-    versionFile:write(tostring(attachment.version))
-    versionFile:close()
 
-    API.syncItemAnnotations(key)
+    API.setAttachmentVersion(key, item.version)
 
     return targetPath, nil
 end
+
 
 function API.downloadWebDAV(key, targetDir, targetPath)
     if API.getWebDAVUrl() == nil then
@@ -543,12 +675,12 @@ function API.downloadWebDAV(key, targetDir, targetPath)
     local url = API.getWebDAVUrl() .. "/" .. key .. ".zip"
     local headers = API.getWebDAVHeaders()
     local zipPath = targetDir .. "/" .. key .. ".zip"
-    print("Fetching URL " .. url)
-    local r, c, h = https.request {
+    logger.dbg("Zotero: fetching URL " .. url)
+    local r, c, h = http.request {
         method = "GET",
         url = url,
         headers = headers,
---        redirect = true,
+        redirect = true,
         sink = ltn12.sink.file(io.open(zipPath, "wb"))
     }
 
@@ -558,14 +690,17 @@ function API.downloadWebDAV(key, targetDir, targetPath)
 
     -- Zotero WebDAV storage packs documents inside a zipfile
     local zip_cmd = "unzip -qq '" .. zipPath .. "' -d '" .. targetDir .. "'"
-    print("Unzipping with " .. zip_cmd)
+    logger.dbg("Zotero: unzipping with " .. zip_cmd)
     local zip_result = os.execute(zip_cmd)
-    local remove_result = os.remove(zipPath)
-
     if zip_result then
         return targetPath
     else
         return nil, "Unzipping failed"
+    end
+
+    local remove_result, e, ecode = os.remove(zipPath)
+    if remove_result == nil then
+        logger.err(("Zotero: failed to remove zip file %s, error %s"):format(zipPath, e))
     end
 end
 
@@ -578,59 +713,30 @@ function API.getWebDAVHeaders()
     }
 end
 
--- Convert a Zotero annotation item to a KOReader annotation
--- NOTE: currently only works with text highlights and annotations.
-local function zotero2KoreaderAnnotation(annotation, pageHeightinPoints)
-    local pos = JSON.decode(annotation.data.annotationPosition)
-    local page = pos.pageIndex + 1
-    
-    local rects = {}
-    for k, bbox in ipairs(pos.rects) do
-        table.insert(rects, {
-            ["x"] = bbox[1],
-            ["y"] = pageHeightinPoints - bbox[4],
-            ["w"] = bbox[3] - bbox[1],
-            ["h"] = bbox[4] - bbox[2],
-        })
+-- Download all files that are part of an offline collection
+function API.batchDownload(progress_callback)
+    local db = API.openDB()
+
+    local item_count = db:exec(ZOTERO_GET_DOWNLOAD_QUEUE_SIZE)[1][1]
+
+    local stmt = db:prepare(ZOTERO_GET_DOWNLOAD_QUEUE)
+    stmt:reset()
+
+    local row, nr = stmt:step({}, {})
+    local i = 1
+    while row ~= nil do
+        local download_key = row[1]
+        local filename = row[2]
+        progress_callback(string.format(_("Downloading attachment %i/%i"), i, item_count))
+        local path, e = API.downloadAndGetPath(download_key, nil)
+
+        if e ~= nil then
+            progress_callback(string.format(_("Error downloading attachment %s: %s"), filename, e))
+        end
+
+        row = stmt:step(row)
+        i = i + 1
     end
-    assert(#rects > 0)
-
-    local shift = 1
-    -- KOReader seems to find 'single word' text boxes which contain pos0 and pos1 to work out the boundaries of the highlight.
-    -- If the positions are not inside any box it looks for the box which has its centre closest to the position. To avoid unexpected
-    -- behaviour shift the positions slightly inside the first/last word box. Assumes top left to bottom right word arrangement...
-    local pos0 = {
-        ["page"] = page,
-        ["rotation"] = 0,
-        ["x"] = rects[1].x + shift,
-        ["y"] = rects[1].y + shift,
-    }
-    -- Take last bounding box
-    local pos1 = {
-        ["page"] = page,
-        ["rotation"] = 0,
-        ["x"] = rects[#rects].x + rects[#rects].w - shift,
-        ["y"] = rects[#rects].y + rects[#rects].h - shift,
-    }
-    -- Convert Zotero time stamp to the format used by KOReader
-    -- e.g. "2024-09-24T18:13:49Z" to "2024-09-24 18:13:49"
-    local koAnnotation = {
-            ["datetime"] = string.sub(string.gsub(annotation.data.dateModified, "T", " "), 1, -2), -- convert format
-            ["drawer"] = "lighten",
-            ["page"] = page,
-            ["pboxes"] = rects,
-            ["pos0"] = pos0,
-            ["pos1"] = pos1,
-            ["text"] = annotation.data.annotationText,
-            ["zoteroKey"] = annotation.key,
-            ["zoteroSortIndex"] = annotation.data.annotationSortIndex,
-            ["zoteroVersion"] = annotation.version,
-        }
-    -- KOReader seems to use the presence of the "note" field to distinguish between "highlight" and "note"
-    -- Important for how they get displayed in the bookmarks!
-    if (annotation.data.annotationComment ~= "") then koAnnotation["note"] = annotation.data.annotationComment end
-
-    return koAnnotation
 end
 
 -- Return a table of entries of a collection.
@@ -640,375 +746,211 @@ end
 -- Collections will have a display name that ends with a slash and contain true
 -- under the key "collection" in their table.
 function API.displayCollection(key)
+    local db = API.openDB()
+    local stmt = db:prepare(ZOTERO_QUERY_ITEMS)
+
+    stmt:reset()
+    stmt:clearbind()
+
+    if key ~= nil then
+        stmt:bind1(1, key)
+    end
+
     local result = {}
+    local row, _ = stmt:step({}, {})
+    while row ~= nil do
+        table.insert(result, {
+            ["key"] = row[1],
+            ["text"] = row[2],
+            ["type"] = row[3],
+        })
 
-    -- Get list of collections
-    local collections = API.getCollections()
-    for k, collection in pairs(collections) do
-        if (key == nil and collection.data.parentCollection == false) or
-            (key ~= nil and collection.data.parentCollection == key) then
-            table.insert(result, {
-                ["key"] = k,
-                ["text"] = collection.data.name .. "/",
-                ["collection"] = true
-            })
-        end
+        row = stmt:step(row)
     end
-    -- Sort collections by name
-    local comparator = function(a,b)
-        return (a["text"] < b["text"])
-    end
-    table.sort(result, comparator)
+    stmt:close()
 
-    -- Get list of items
-    -- Careful: linear search. Can be optimized quite a bit!
-    local items = API.getItems()
-    local collectionItems = {}
-
-    for k, item in pairs(items) do
-        if item.data.itemType == "attachment"
-            and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType ) then
-            local parentItem = nil
-            if item.data.parentItem ~= nil then
-                parentItem = items[item.data.parentItem]
-            end
-            if parentItem == nil then  -- parentless item or parent could not be found. 
-            -- Use the items metadata directly (cheap fix...; shoud do this more nicely)
-                parentItem = item
-            end
-            local displayItem = false
-            if key == nil then
-            -- We are dealing with the root collection here
-                if parentItem.data.collections == nil or #parentItem.data.collections == 0 then 
-                -- this entry is not part of the collection and will be shown as part of the root collection
-                    displayItem = true
-                end
-            elseif table_contains(parentItem.data.collections, key) then
-            -- this entry is not part of the collection specified by key
-                displayItem = true
-            end
-        
-            if displayItem then
-                local author = parentItem.meta.creatorSummary or "Unknown"
-                local name = author .. " - " .. parentItem.data.title
-
-                table.insert(collectionItems, {
-                    ["key"] = k,
-                    ["text"] = name
-                })
-			end
-		end
-    end
-    table.sort(collectionItems, comparator)
-    
-    -- Join collections and items together and return it
-    return joinTables(result, collectionItems)
+    return result
 end
 
 function API.displaySearchResults(query)
-    print("displaySearchResults for " .. query)
-    local queryRegex = ".*" .. string.gsub(string.lower(query), " ", ".*") .. ".*"
-    print("Searching for " .. queryRegex)
-    -- Careful: linear search. Can be optimized quite a bit!
-    local items = API.getItems()
-    local results = {}
+    local queryExpr = "%" .. string.gsub(query, " ", "%") .. "%"
+    local db = API.openDB()
+    local stmt = db:prepare(ZOTERO_SEARCH_ITEMS)
 
-    for k, item in pairs(items) do
-        if item.data.itemType == "attachment"
-            and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType )
-            and item.data.parentItem ~= nil then
-            local parentItem = items[item.data.parentItem]
-            if parentItem ~= nil then
-                local author = parentItem.meta.creatorSummary or "Unknown"
-                local name = author .. " - " .. parentItem.data.title
+    stmt:reset()
+    stmt:clearbind()
 
-                if parentItem.data.DOI ~= nil and parentItem.data.DOI ~= "" then
-                    name = name .. " - " .. parentItem.data.DOI
-                end
+    stmt:bind1(1, queryExpr)
 
-                if string.match(string.lower(name), queryRegex) then
-                    table.insert(results, {
-                        ["key"] = k,
-                        ["text"] = name
-                    })
-                end
-            end
-        end
-    end
-
-    return results
-end
-
-
--- Output the timezone-agnostic timestamp, since KOReader uses timestamps with
--- local time.
-function API.addTimezone(timestamp)
-    local year, month, day, hour, minute, second = string.match(timestamp,
-        "(%d%d%d%d)-(%d%d)-(%d%d) (%d%d):(%d%d):(%d%d)")
-    local time = {
-        ["year"] = year,
-        ["month"] = month,
-        ["day"] = day,
-        ["hour"] = hour,
-        ["min"] = minute,
-        ["sec"] = second
-    }
-
-    return os.date("!%Y-%m-%dT%H:%M:%SZ", os.time(time))
-end
-
-function API.localTimezone(timestamp)
-end
-
-function API.compareTimestamps(zoteroTimestamp, koreaderTimestamp)
-    local a,b = zoteroTimestamp, API.addTimezone(koreaderTimestamp)
-
-    if a == b then
-       return 0
-    elseif a < b then
-        return -1
-    else
-        return 1
-    end
-end
-
-function API.syncModifiedItems()
-    local modItems = API.getModifiedItems()
-end
-
-function getPageDimensions(filePath)
-
-    -- We need to get page height of pdf document to be able to convert Zotero position to KOReader positions
-    -- Open document to get the dimensions of the first page
-    local DocumentRegistry = require("document/documentregistry")	
-    local provider = DocumentRegistry:getProvider(filePath)	
-    local document = DocumentRegistry:openDocument(filePath, provider)
-    if not document then
-        UIManager:show(InfoMessage:new{
-            text = _("No reader engine for this file or invalid file.")
+    local result = {}
+    local row, _ = stmt:step({}, {})
+    while row ~= nil do
+        table.insert(result, {
+            ["key"] = row[1],
+            ["text"] = row[2],
+            ["type"] = row[3],
         })
-        return
+
+        row = stmt:step(row)
     end
-    -- Assume all pages have the same dimensions and thus just take first page:
-    local pageDims = document:getNativePageDimensions(1)
-    print("Page dimensions: ", JSON.encode(pageDims))
-    document:close()
-    return pageDims
+    stmt:close()
+
+    return result
 end
 
--- Sync annotations for specified item from Zotero with sdr folder
-function API.syncItemAnnotations(itemKey, annotation_callback)
-    local items = API.getItems()
-    local fileDir, filePath = API.getDirAndPath(itemKey)
 
-    if filePath == nil then
-        return "Error: could not find item"
-    end
-    
-    -- (Relevant) Zotero annotation keys (currently only for highlights)
-    local zoteroItems = {}
-    local updateNeeded = true
+function API.resetSyncState()
+    local db = API.openDB()
+    db:exec(ZOTERO_DB_DELETE)
+end
 
-    local zotCount = 0
-    
-    local settings = LuaSettings:open(BaseUtil.joinPath(fileDir, ".zotero.metadata.lua"))    
-    local localLibVersion = settings:readSetting("libraryVersion", 0)
-    local libVersion = tonumber(API.getLibraryVersion())
-    print("Local lib version: ", localLibVersion)
-    if localLibVersion >= libVersion then 
-        print("No need to check Zotero database") 
-        zoteroItems = settings:readSetting("zoteroItems")
-        updateNeeded = false
+
+function API.isOfflineCollection(key)
+    local db = API.openDB()
+
+    local stmt = db:prepare(ZOTERO_GET_OFFLINE_COLLECTION):reset():bind1(1, key)
+
+    local _, nr = stmt:resultset()
+
+
+    return (nr > 0)
+end
+
+function API.addOfflineCollection(key)
+    local db = API.openDB()
+    local stmt = db:prepare(ZOTERO_ADD_OFFLINE_COLLECTION)
+    stmt:reset():bind1(1, key):step()
+
+end
+
+function API.removeOfflineCollection(key)
+    local db = API.openDB()
+    local stmt = db:prepare(ZOTERO_REMOVE_OFFLINE_COLLECTION)
+    stmt:reset():bind1(1, key):step()
+end
+
+function API.getAttachmentVersion(key)
+    local db = API.openDB()
+    local stmt = db:prepare(ZOTERO_GET_VERSION)
+    local result, nr = stmt:reset():bind(key):resultset()
+
+    stmt:close()
+
+    if nr == 0 then
+        return nil
     else
-        print("Checking item\'s annotations in Zotero database")
-        -- Scan zotero annotations.
-        for annotationKey, annotation in pairs(items) do
-            if annotation.data.parentItem == itemKey
-                and annotation.data.itemType == "annotation"
-                and annotation.data.annotationType == "highlight" then
-                zoteroItems[annotationKey] = { ["status"] = "newerRemote" }
-                zotCount = zotCount + 1
-            end
-        end
-        if zotCount > 0 then
-            print("Found "..zotCount.." zotero annotations.")
-        else  -- nothing to update!
-            updateNeeded = false
-        end
+        return result[1][1]
     end
-    
-    --print("Keys: \""..keysToString(zoteroItems).."\"")
-    API.verifyKeyAccess()
-    
-    -- Add them to the docsettings 
-    -- NOTE: Currently annotations that are not already there just get overwritten
-    -- TO_DO: Should update existing one and sync back changes and new annotations
-    local docSettings = DocSettings:open(filePath)
-    
-    local koreaderAnnotations = docSettings:readSetting("annotations", {})
-    print(#koreaderAnnotations.." KOReader Annotations. ")
 
-    local localZotAnn = {}
-    local localKORAnn = {}
-    local localMods = 0
-    -- If there are locally stored KOReader annotations, check them to identify Zotero annotations
-    if #koreaderAnnotations > 0 then
-        -- Iterate over KOReader annotations to check which ones are zotero items
-        for idx, ann in ipairs(koreaderAnnotations) do
-            if (ann.zoteroKey ~= nil) then
-                --print("KOReader annotation imported from Zotero ", ann.zoteroKey)
-                localZotAnn[ann.zoteroKey] = idx
-            else
-                if ann.drawer ~= nil then -- it's a note or highlight
-                    logger.dbg("Zotero: Additional KOReader annotation: "..ann.text)
-                    -- make 'fake' sort key
-                    koreaderAnnotations[idx].zoteroSortIndex = string.format("%05d|%05d|%05d", ann.page-1, idx, math.floor(ann.pos0.x))
-                    --print(koreaderAnnotations[idx].zoteroSortIndex)
-                    table.insert(localKORAnn, idx)
-                    localMods = localMods + 1
-                else -- it's a bookmark (or even s/t else?)
-                    logger.dbg("Zotero: Ignoring bookmark: "..ann.text)
-                    koreaderAnnotations[idx].zoteroSortIndex = string.format("%05d|%05d|00000", ann.page-1, idx)
-                end
-            end
+end
+
+function API.setAttachmentVersion(key, version)
+    local db = API.openDB()
+    local stmt = db:prepare(ZOTERO_SET_VERSION)
+    stmt:reset():bind(key, version):step()
+    stmt:close()
+end
+
+function API.syncAnnotations(progress_callback)
+    local db = API.openDB()
+    local item_count = db:exec(ZOTERO_GET_LOCAL_PDF_ITEMS_SIZE)[1][1]
+
+
+    local stmt = db:prepare(ZOTERO_GET_LOCAL_PDF_ITEMS)
+
+    stmt:reset()
+    stmt:clearbind()
+
+    local row, _ = stmt:step({}, {})
+    local i = 1
+    while row ~= nil do
+        local key = row[1]
+        local filename = row[2]
+
+        local file_path = API.storage_dir .. "/" .. key .. "/" .. filename
+        Annotations.createAnnotations(file_path, key, API.createItems)
+        row = stmt:step(row)
+
+        if progress_callback ~= nil and (i == 1 or i % 10 == 0 or i == item_count) then
+            progress_callback(string.format(_("Syncing annotations of file %i/%i"), i, item_count))
         end
-        
-        -- Deal with local Zotero annotations
-        --
-        -- Iterate over local Zotero annotations to check whether they have been changed
-        for key, idx in pairs(localZotAnn) do
-            local item = items[key]
-            local ann = koreaderAnnotations[idx]
-            zoteroItems[key].position = idx
-            if item ~= nil then
-                if item.version > ann.zoteroVersion then
-                    print("Database item is newer. Overwrite local version of "..key)
-                    zoteroItems[key].status = "newerRemote"
-                else
-                    if (item.data.annotationComment == ann.note) or -- same comment
-                    (ann.note == nil and item.data.annotationComment == "") then  -- or unchanged text hightlight only
-                        print("Up to date "..key) 
-                        zoteroItems[key].status = "inSync"
-                    else
-                        print("Locally modified note "..key) 
-                        zoteroItems[key].status = "newerLocal" 
-                        localMods = localMods + 1
-                    end                   
-                end
-            else
-                print("Annotation has been deleted in Zotero "..key)
-                zoteroItems[key].status = "deletedRemote"        
-            end
-        end
-        -- Check with the remote list of annotations to see if there are any new ones or local deletions...
-        for key, annInfo in pairs(zoteroItems) do
-            if localZotAnn[key] == nil then
-                if items[key].version > localLibVersion then
-                    print("New Zotero annotation: "..key)
-                    zoteroItems[key].status = "newRemote"
-                else
-                    print("Annotation has been deleted locally: "..key)
-                    zoteroItems[key].status = "deletedLocal"
-                    localMods = localMods + 1
-                end
-            end        
-        end
-        print("Zotero annotations ", JSON.encode(zoteroItems))
-    else
-        if zoteroItems ~= nil then updateNeeded = true end
+
+        i = i + 1
     end
-    -- Need to decide what to do in case there are local changes
-    -- Maybe have dialogue with choice of discarding, keeping them locally or synching them to Zotero?
-    local action = "keep"
-    if annotation_callback ~= nil then action = annotation_callback() end
-    action = "upload"
-    --action = "discard"
-    if localMods > 0 then
-        print(localMods.." locally modified annotations")
-        if action == "discard" then  -- delete all local annotations
-            print("Discarding all local changes and revert to Zotero annotations.")
-            koreaderAnnotations = {}
-            updateNeeded = true
-        elseif action == "upload" then
-            print("Zotero upload of changes is not implemented yet! Just keeping changes locally.")
+    stmt:close()
+end
+
+-- Create a whole range of items.
+-- Returns an array with a status code per item
+function API.createItems(items)
+    -- up to 50 items can be created with one request, see https://www.zotero.org/support/dev/web_api/v3/write_requests#creating_multiple_objects for details
+    local API_MAX_ITEMS_PER_REQUEST = 50
+    local total_items = #items
+    local total_requests = math.ceil(total_items / API_MAX_ITEMS_PER_REQUEST)
+
+    local created_items = {}
+    for i=1,total_items do
+        table.insert(created_items, nil)
+    end
+
+    local e, api_key, user_id = API.ensureKeyAndID()
+    if e ~= nil then
+        return created_items, e
+    end
+    local headers = API.getHeaders(api_key)
+    local create_url = ("https://api.zotero.org/users/%s/items"):format(user_id)
+
+
+    for request_no=1,total_requests do
+        local request_items = {}
+        local start_item = (request_no - 1) * API_MAX_ITEMS_PER_REQUEST
+        local end_item = math.min(start_item + API_MAX_ITEMS_PER_REQUEST, total_items)
+        for i=start_item,end_item do
+            table.insert(request_items, items[i])
+        end
+
+        local request_json = JSON.encode(request_items)
+        headers["if-unmodified-since"] = API.getLibraryVersion()
+        local response = {}
+        logger.dbg(("Zotero: POST request to %s, body:\n%s"):format(create_url, request_json))
+        local r,c, response_headers = http.request {
+            method = "POST",
+            url = create_url,
+            headers = headers,
+            sink = ltn12.sink.table(response),
+            source = ltn12.source.string(request_json)
+        }
+        e = API.verifyResponse(r, c)
+        if e ~= nil then return created_items, e end
+
+        local content = table.concat(response, "")
+        local ok, result = pcall(JSON.decode, content)
+        if not ok then
+            return created_items, "Error: failed to parse JSON in response to annotation creation request"
+        end
+
+        local new_library_version = response_headers["Last-Modified-Version"]
+        if new_library_version ~= nil then
+            API.setLibraryVersion(new_library_version)
         else
-            print("Keeping the local changes.")
+            logger.err("Z: could not update library version from create request, got " .. tostring(new_library_version))
+        end
+
+        for k,v in pairs(result["successful"]) do
+            local index = start_item + tonumber(k) + 1
+            created_items[index] = v
+        end
+
+        for k,v in pairs(result["unchanged"]) do
+            local index = start_item + tonumber(k) + 1
+            local zotero_key = v
+            created_items[index] = {
+                ["key"] = zotero_key
+            }
         end
     end
-    
-    if updateNeeded then
-        -- We need to get page height of pdf document to be able to convert Zotero position to KOReader positions
-        local pageDims = settings:readSetting("pageDimensions")
-        if pageDims == nil then
-            pageDims = getPageDimensions(filePath)
-        end
-        
-        if #koreaderAnnotations == 0 then
-            for key, annInfo in pairs(zoteroItems) do
-                table.insert(koreaderAnnotations, zotero2KoreaderAnnotation(items[key], pageDims.h))
-            end
-        else
-            for itemKey, itemInfo in pairs(zoteroItems) do
-            print("Updating item ", itemKey, itemInfo.status)
-                if itemInfo.status == "newerRemote" then
-                    koreaderAnnotations[itemInfo.position] = zotero2KoreaderAnnotation(items[itemKey], pageDims.h)
-                elseif itemInfo.status == "deletedRemote" then
-                    koreaderAnnotations[itemInfo.position] = nil
-                elseif itemInfo.status == "newRemote" then
-                    table.insert(koreaderAnnotations, zotero2KoreaderAnnotation(items[itemKey], pageDims.h))
-                end
-            end
-        end
-        
-        -- Unsorted annotations seem to lead to spurious results when displaying notes!
-        -- So seems important to have them in the right order before saving them
-        
-        -- Use zoteroSortIndex for sorting.
-        -- No idea how this index is generated, but this seems to work...
-        local comparator = function(a,b)
-            return (a["zoteroSortIndex"] < b["zoteroSortIndex"])
-        end
-        table.sort(koreaderAnnotations, comparator)
 
-        -- Write to sdr file
-        docSettings:saveSetting("annotations", koreaderAnnotations)
-        -- Save page dimensions for future use
-        settings:saveSetting("pageDimensions", pageDims)
-
---      print(JSON.encode(koAnnotations))          
-    end
-    
-    settings:saveSetting("zoteroItems", zoteroItems)
-    settings:saveSetting("libraryVersion", tonumber(API.getLibraryVersion()))
-    settings:flush() 
-    ---- Iterate over Zotero annotations, add KOReader items if necessary
-    --for annotationKey, annotation in pairs(zoteroAnnotations) do
-        ---- Try to find KOReader annotation
-        --local koreaderAnnotation = koreaderAnnotations[annotationKey]
-
-        --if koreaderAnnotation == nil then
-            ---- There is no corresponding koreader annotation, just add a new one.
-            --koreaderAnnotation = zotero2KoreaderAnnotation(annotation)
-            --local page = koreaderAnnotation.bookmark.page
-            --table.insert(bookmark, koreaderAnnotation.bookmark)
-            --highlight[page] = highlight[page] or {}
-            --table.insert(highlight[page], koreaderAnnotation.highlight)
-            --print("Creating koreader annotation ", koreaderAnnotation.bookmark.notes, koreaderAnnotation.bookmark.text)
-        --else
-            --print("Modifying existing zotero annotation")
-            ---- The koreader annotation already exists, try to update it.
-            --if modItems[annotationKey] ~= nil then
-                ---- The item was already modified, so the KOReader annotation was newer.
-                ---- Skip update in this round.
-            --else
-                --bookmark[koreaderAnnotation.bookmarkIndex].text = annotation.data.annotationType
-            --end
-        --end
-    --end
-
---    docSettings:saveSetting("highlight", highlight)
-    docSettings:flush()
---    API.saveModifiedItems()
+    return created_items, nil
 end
 
 
