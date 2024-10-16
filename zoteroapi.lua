@@ -1,6 +1,5 @@
 local BaseUtil = require("ffi/util")
 local LuaSettings = require("luasettings")
-local http = require("socket.http")
 local https = require("ssl.https")
 local ltn12 = require("ltn12")
 local JSON = require("json")
@@ -691,15 +690,16 @@ function API.downloadWebDAV(key, targetDir, targetPath)
     local zip_cmd = "unzip -qq '" .. zipPath .. "' -d '" .. targetDir .. "'"
     logger.dbg("Zotero: unzipping with " .. zip_cmd)
     local zip_result = os.execute(zip_cmd)
-    if zip_result then
-        return targetPath
-    else
-        return nil, "Unzipping failed"
-    end
 
     local remove_result, e, ecode = os.remove(zipPath)
     if remove_result == nil then
         logger.err(("Zotero: failed to remove zip file %s, error %s"):format(zipPath, e))
+    end
+
+    if zip_result then
+        return targetPath
+    else
+        return nil, "Unzipping failed"
     end
 end
 
