@@ -928,7 +928,7 @@ function API.createItems(items)
             return created_items, "Error: failed to parse JSON in response to annotation creation request"
         end
 
-        local new_library_version = response_headers["Last-Modified-Version"]
+        local new_library_version = response_headers["last-modified-version"]
         if new_library_version ~= nil then
             API.setLibraryVersion(new_library_version)
         else
