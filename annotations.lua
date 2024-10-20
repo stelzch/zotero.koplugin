@@ -36,6 +36,8 @@ local K2Z_STYLE = {
     ["invert"] = "highlight",
 }
 
+local defaultColor = K2Z_COLORS["gray"]
+
 function Annotations.getPageDimensions(file, pages)
     if pages == nil then
         return {}
@@ -115,7 +117,8 @@ end
 
 function Annotations.convertKOReaderToZotero(annotation, page_height, parent_key)
     local date = Annotations.utcFromLocal(annotation.datetime)
-    local color = Annotations.colorKOReaderToZotero(annotation.color)
+    local color = defaultColor
+    if annotation.color ~= nil then color = Annotations.colorKOReaderToZotero(annotation.color) end
     local type = Annotations.annotationTypeKOReaderToZotero(annotation.drawer)
     local rects = {}
 
