@@ -618,6 +618,8 @@ function API.syncAllItems(progress_callback)
     local callback = progress_callback or function() end
     local db = API.openDB()
     local stmt_update_item = db:prepare(ZOTERO_DB_UPDATE_ITEM)
+    local stmt_update_itemData = db:prepare(ZOTERO_DB_UPDATE_ITEMDATA)
+
     local stmt_update_collection = db:prepare(ZOTERO_DB_UPDATE_COLLECTION)
     local since = API.getLibraryVersion()
 
@@ -656,6 +658,7 @@ function API.syncAllItems(progress_callback)
 --            stmt_update_item:reset():bind(1, 1, key, item.version, JSON.encode(item)):step()
 --            stmt_update_item:reset():bind(1, 1, key, item.version):step()
             stmt_update_item:reset():bind(1, item.data.itemType, key, item.version):step()
+            stmt_update_itemData:reset():bind(key, JSON.encode(item.data)):step()
         end
     end)
     if e ~= nil then return e end
