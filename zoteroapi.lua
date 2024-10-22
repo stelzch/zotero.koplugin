@@ -29,14 +29,50 @@ local SUPPORTED_MEDIA_TYPES = {
 }
 
 local ZOTERO_DB_SCHEMA = [[
-CREATE TABLE IF NOT EXISTS items (
-    key TEXT PRIMARY KEY,
-    value BLOB
+CREATE TABLE IF NOT EXISTS itemData (
+	itemID INTEGER,    
+    --key TEXT PRIMARY KEY,
+    value BLOB,
+    FOREIGN KEY (itemID) REFERENCES items(itemID) ON DELETE CASCADE
 );
-CREATE TABLE IF NOT EXISTS collections (
-    key TEXT PRIMARY KEY,
-    value BLOB
+CREATE TABLE IF NOT EXISTS items (    
+	itemID INTEGER PRIMARY KEY,    
+	itemTypeID INT NOT NULL,    
+	libraryID INT NOT NULL,    
+	key TEXT NOT NULL,    
+	version INT NOT NULL DEFAULT 0,    
+	synced INT NOT NULL DEFAULT 0,    
+	UNIQUE (libraryID, key),    
+	FOREIGN KEY (libraryID) REFERENCES libraries(libraryID) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS libraries (
+	libraryID INTEGER PRIMARY KEY,
+	type TEXT NOT NULL,
+	editable INT NOT NULL,
+	name TEXT NOT NUll,
+	userID INT NOT NULL DEFAULT 0,
+	version INT NOT NULL DEFAULT 0,
+	storageVersion INT NOT NULL DEFAULT 0,
+	lastSync INT NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS collections (    
+	collectionID INTEGER PRIMARY KEY,
+	collectionName TEXT NOT NULL,
+	parentCollectionID INT DEFAULT NULL,
+	libraryID INT NOT NULL,
+	key TEXT NOT NULL,
+	version INT NOT NULL DEFAULT 0,
+	synced INT NOT NULL DEFAULT 0,
+	UNIQUE (libraryID, key),
+	FOREIGN KEY (libraryID) REFERENCES libraries(libraryID) ON DELETE CASCADE,
+	FOREIGN KEY (parentCollectionID) REFERENCES collections(collectionID) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS itemTypes ( 
+	itemTypeID INTEGER PRIMARY KEY, 
+	typeName TEXT, 
+	display INT DEFAULT 1 
+);
+
 CREATE TABLE IF NOT EXISTS offline_collections(
     key TEXT PRIMARY KEY
 );
@@ -47,6 +83,52 @@ CREATE TABLE IF NOT EXISTS attachment_versions(
 );
 ]]
 
+local ZOTERO_DB_INIT_ITEMTYPES = [[
+INSERT INTO itemTypes(itemTypeID,typeName,display)
+VALUES
+(1,"annotation",1          ),
+(2,"artwork",1             ),
+(3,"attachment",1          ),
+(4,"audioRecording",1      ),
+(5,"bill",1                ),
+(6,"blogPost",1            ),
+(7,"book",1                ),
+(8,"bookSection",1         ),
+(9,"case",1                ),
+(10,"computerProgram",1    ),
+(11,"conferencePaper",1    ),
+(12,"dictionaryEntry",1    ),
+(13,"document",1           ),
+(14,"email",1              ),
+(15,"encyclopediaArticle",1),
+(16,"film",1               ),
+(17,"forumPost",1          ),
+(18,"hearing",1            ),
+(19,"instantMessage",1     ),
+(20,"interview",1          ),
+(21,"journalArticle",1     ),
+(22,"letter",1             ),
+(23,"magazineArticle",1    ),
+(24,"manuscript",1         ),
+(25,"map",1                ),
+(26,"newspaperArticle",1   ),
+(27,"note",1               ),
+(28,"patent",1             ),
+(29,"podcast",1            ),
+(30,"preprint",1           ),
+(31,"presentation",1       ),
+(32,"radioBroadcast",1     ),
+(33,"report",1             ),
+(34,"statute",1            ),
+(35,"thesis",1             ),
+(36,"tvBroadcast",1        ),
+(37,"videoRecording",1     ),
+(38,"webpage",1            ),
+(39,"dataset",1            ),
+(40,"standard",1           );
+]]
+
+--[[
 local ZOTERO_CREATE_VIEWS = [[ 
 CREATE TEMPORARY TABLE IF NOT EXISTS supported_media_types (mime TEXT);
 INSERT INTO supported_media_types(mime) VALUES ('application/pdf'), ('application/epub+zip'), ('text/html') ON CONFLICT DO NOTHING;
@@ -97,6 +179,12 @@ WHERE
 (jsonb_extract(items.value, '$.data.linkMode') IN (SELECT type FROM supported_link_types)) AND
 (jsonb_extract(items.value, '$.data.contentType') = 'application/pdf');
 ]]
+--]]
+
+local ZOTERO_DB_INIT_LIBS = [[
+-- only insert item if table is empty:
+INSERT INTO libraries(type, editable, name) SELECT 'user',1,'' WHERE NOT EXISTS(SELECT libraryID FROM libraries);
+]]
 
 local ZOTERO_GET_DOWNLOAD_QUEUE = [[
 select
@@ -113,11 +201,20 @@ local ZOTERO_GET_LOCAL_PDF_ITEMS = [[ SELECT * FROM local_pdf_items; ]]
 local ZOTERO_GET_LOCAL_PDF_ITEMS_SIZE = [[ SELECT COUNT(*) FROM local_pdf_items; ]]
 
 local ZOTERO_DB_UPDATE_ITEM = [[
-INSERT INTO items(key, value) VALUES(?,jsonb(?)) ON CONFLICT DO UPDATE SET value = excluded.value;
+--INSERT INTO items(itemTypeID, libraryID, key, version) VALUES(?1, ?2, ?3, ?4);
+INSERT INTO items(itemTypeID, libraryID, key, version) SELECT itemTypeID, ?1, ?3, ?4 FROM itemTypes WHERE typeName IS ?2
+--INSERT INTO itemData(itemID, value) SELECT itemID,jsonb(?5) FROM items WHERE key IS ?3 ON CONFLICT DO UPDATE SET value = excluded.value;
+]]
+
+local ZOTERO_DB_UPDATE_ITEMDATA = [[
+--INSERT INTO items(itemTypeID, libraryID, key, version) VALUES(?1, ?2, ?3, ?4);
+INSERT INTO itemData(itemID, value) SELECT itemID,jsonb(?2) FROM items WHERE key IS ?1 ON CONFLICT DO UPDATE SET value = excluded.value;
 ]]
 
 local ZOTERO_DB_UPDATE_COLLECTION = [[
-INSERT INTO collections(key, value) VALUES(?,jsonb(?)) ON CONFLICT DO UPDATE SET value = excluded.value;
+--INSERT INTO collections(collectionName, parentCollectionID, libraryID , key, version) SELECT ?1, collectionID, 1, ?3, ?4 FROM collections WHERE key=?2;
+INSERT INTO collections(collectionName, libraryID , key, version) VALUES(?1, 1, ?2, ?3);
+--INSERT INTO collections(key, value) VALUES(?,jsonb(?)) ON CONFLICT DO UPDATE SET value = excluded.value;
 ]]
 
 local ZOTERO_DB_DELETE = [[
@@ -137,37 +234,37 @@ local ZOTERO_ADD_OFFLINE_COLLECTION = [[ INSERT INTO offline_collections(key) VA
 local ZOTERO_REMOVE_OFFLINE_COLLECTION = [[ DELETE FROM offline_collections WHERE key = ?; ]]
 
 local ZOTERO_QUERY_ITEMS = [[
-SELECT key, name, type FROM (SELECT
+SELECT 
     key,
-    jsonb_extract(value, '$.data.name') || '/' AS name,
-    jsonb_extract(value, '$.data.parentCollection') AS parent_key,
-    'collection' AS type
-FROM collections
-WHERE (jsonb_extract(value, '$.data.deleted') IS NOT 1) AND ((?1 IS NULL AND parent_key = false) OR (?1 IS NOT NULL AND parent_key = ?1))
-ORDER BY name)
-UNION ALL
-SELECT key, name || title AS name, type FROM (
-SELECT
-    key,
-    jsonb_extract(value, '$.data.title') AS title,
-    -- if possible, prepend creator summary
-    coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') AS name,
-    iif(jsonb_extract(value, '$.data.itemType') = 'attachment', 'attachment', 'item') AS type
-FROM items
-WHERE
--- don't display items in root collection
-?1 IS NOT NULL
--- the item should not be deleted
-AND (jsonb_extract(value, '$.data.deleted') IS NOT 1)
--- the item must belong to the collection we query
-AND (?1 IN (SELECT value FROM json_each(jsonb_extract(items.value, '$.data.collections'))))
--- and it must either be an attachment or have at least one attachment
-AND (jsonb_extract(value, '$.data.itemType') = 'attachment'
-     OR (SELECT COUNT(key) FROM items AS child
-            WHERE jsonb_extract(child.value, '$.data.parentItem') = items.key
-                  AND jsonb_extract(child.value, '$.data.itemType') = 'attachment'
-                  AND jsonb_extract(child.value, '$.data.deleted') IS NOT 1) > 0)
-ORDER BY title);
+    collectionName || '/',
+    'collection'
+FROM collections;
+WHERE (?1 IS NULL AND parentCollectionID IS NULL)
+
+--WHERE ((?1 IS NULL AND parent_key IS NULL) OR (?1 IS NOT NULL AND parent_key = ?1))
+--UNION ALL
+--SELECT key, name || title AS name, type FROM (
+--SELECT
+    --key,
+    --jsonb_extract(value, '$.data.title') AS title,
+    ---- if possible, prepend creator summary
+    --coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') AS name,
+    --iif(jsonb_extract(value, '$.data.itemType') = 'attachment', 'attachment', 'item') AS type
+--FROM items
+--WHERE
+---- don't display items in root collection
+--?1 IS NOT NULL
+---- the item should not be deleted
+--AND (jsonb_extract(value, '$.data.deleted') IS NOT 1)
+---- the item must belong to the collection we query
+--AND (?1 IN (SELECT value FROM json_each(jsonb_extract(items.value, '$.data.collections'))))
+---- and it must either be an attachment or have at least one attachment
+--AND (jsonb_extract(value, '$.data.itemType') = 'attachment'
+     --OR (SELECT COUNT(key) FROM items AS child
+            --WHERE jsonb_extract(child.value, '$.data.parentItem') = items.key
+                  --AND jsonb_extract(child.value, '$.data.itemType') = 'attachment'
+                  --AND jsonb_extract(child.value, '$.data.deleted') IS NOT 1) > 0)
+--ORDER BY title);
 ]]
 
 local ZOTERO_SEARCH_ITEMS = [[
@@ -251,7 +348,7 @@ function API.openDB()
         return API.db
     else
         API.db = SQ3.open(API.db_path)
-        API.db:exec(ZOTERO_CREATE_VIEWS)
+--        API.db:exec(ZOTERO_CREATE_VIEWS)
         return API.db
     end
 
@@ -278,10 +375,19 @@ function API.init(zotero_dir)
     logger.dbg("Zotero: storage dir" .. API.storage_dir)
 
     API.db_path = BaseUtil.joinPath(API.zotero_dir, "zotero.db")
-    logger.dbg("Zotero: opening db path ", API.db_path)
+    logger.info("Zotero: opening db path ", API.db_path)
     local db = API.openDB()
-    db:exec(ZOTERO_DB_SCHEMA)
-    db:exec(ZOTERO_CREATE_VIEWS)
+    if API.getLibraryVersion() == 0 then
+		logger.info("Zotero db version is 0. Set up libraries")
+		db:exec(ZOTERO_DB_SCHEMA)
+		db:exec(ZOTERO_DB_INIT_LIBS)
+		local cnt, _ = db:exec("SELECT COUNT(*) FROM itemTypes")
+		print(cnt[1][1])
+		if cnt[1][1] == 0 then
+			db:exec(ZOTERO_DB_INIT_ITEMTYPES)
+		end
+	end
+    --db:exec(ZOTERO_CREATE_VIEWS)
 end
 
 function API.getAPIKey()
@@ -527,10 +633,12 @@ function API.syncAllItems(progress_callback)
         callback(string.format("Syncing collections %.0f%%", percentage))
         for i = 1, #partial_entries do
             -- Ruthlessly update our local items
-            local collection = partial_entries[i]
+            local collection = partial_entries[i].data
             local key = collection.key
-
-            stmt_update_collection:reset():bind(key, JSON.encode(collection)):step()
+			print(collection.name, collection.key, collection.parentCollection,collection.version)
+			if collection.parentCollection == false then collection.parentCollection = nil end
+--            stmt_update_collection:reset():bind(collection.name, collection.parentCollection, collection.key, collection.version):step()
+            stmt_update_collection:reset():bind(collection.name, collection.key, collection.version):step()
         end
     end)
     if e ~= nil then return e end
@@ -544,15 +652,18 @@ function API.syncAllItems(progress_callback)
             local item = partial_entries[i]
             local key = item.key
 
-            stmt_update_item:reset():bind(key, JSON.encode(item)):step()
+--            stmt_update_item:reset():bind(key, JSON.encode(item)):step()
+--            stmt_update_item:reset():bind(1, 1, key, item.version, JSON.encode(item)):step()
+--            stmt_update_item:reset():bind(1, 1, key, item.version):step()
+            stmt_update_item:reset():bind(1, item.data.itemType, key, item.version):step()
         end
     end)
     if e ~= nil then return e end
 
     API.setLibraryVersion(r)
 
-    API.batchDownload(callback)
-    API.syncAnnotations()
+    --API.batchDownload(callback)
+    --API.syncAnnotations()
 
     return nil
 end
@@ -753,6 +864,9 @@ function API.displayCollection(key)
 
     if key ~= nil then
         stmt:bind1(1, key)
+        stmt:bind1(1, 1)
+	else
+        print("Key is nil")
     end
 
     local result = {}
@@ -763,11 +877,14 @@ function API.displayCollection(key)
             ["text"] = row[2],
             ["type"] = row[3],
         })
-
+		print(row[1], row[2], row[3])
         row = stmt:step(row)
     end
     stmt:close()
-
+	
+--	local res, n = db:exec([[ SELECT  key, collectionName || '/', 'collection' FROM collections; ]])
+	local res, n = db:exec([[ SELECT  key FROM collections; ]])
+	print(n)
     return result
 end
 
