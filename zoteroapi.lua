@@ -84,48 +84,48 @@ CREATE TABLE IF NOT EXISTS attachment_versions(
 ]]
 
 local ZOTERO_DB_INIT_ITEMTYPES = [[
-INSERT INTO itemTypes(itemTypeID,typeName,display)
+INSERT INTO itemTypes(itemTypeID,typeName)
 VALUES
-(1,"annotation",1          ),
-(2,"artwork",1             ),
-(3,"attachment",1          ),
-(4,"audioRecording",1      ),
-(5,"bill",1                ),
-(6,"blogPost",1            ),
-(7,"book",1                ),
-(8,"bookSection",1         ),
-(9,"case",1                ),
-(10,"computerProgram",1    ),
-(11,"conferencePaper",1    ),
-(12,"dictionaryEntry",1    ),
-(13,"document",1           ),
-(14,"email",1              ),
-(15,"encyclopediaArticle",1),
-(16,"film",1               ),
-(17,"forumPost",1          ),
-(18,"hearing",1            ),
-(19,"instantMessage",1     ),
-(20,"interview",1          ),
-(21,"journalArticle",1     ),
-(22,"letter",1             ),
-(23,"magazineArticle",1    ),
-(24,"manuscript",1         ),
-(25,"map",1                ),
-(26,"newspaperArticle",1   ),
-(27,"note",1               ),
-(28,"patent",1             ),
-(29,"podcast",1            ),
-(30,"preprint",1           ),
-(31,"presentation",1       ),
-(32,"radioBroadcast",1     ),
-(33,"report",1             ),
-(34,"statute",1            ),
-(35,"thesis",1             ),
-(36,"tvBroadcast",1        ),
-(37,"videoRecording",1     ),
-(38,"webpage",1            ),
-(39,"dataset",1            ),
-(40,"standard",1           );
+(1,"annotation"          ),
+(2,"artwork"             ),
+(3,"attachment"          ),
+(4,"audioRecording"      ),
+(5,"bill"                ),
+(6,"blogPost"            ),
+(7,"book"                ),
+(8,"bookSection"         ),
+(9,"case"                ),
+(10,"computerProgram"    ),
+(11,"conferencePaper"    ),
+(12,"dictionaryEntry"    ),
+(13,"document"           ),
+(14,"email"              ),
+(15,"encyclopediaArticle"),
+(16,"film"               ),
+(17,"forumPost"          ),
+(18,"hearing"            ),
+(19,"instantMessage"     ),
+(20,"interview"          ),
+(21,"journalArticle"     ),
+(22,"letter"             ),
+(23,"magazineArticle"    ),
+(24,"manuscript"         ),
+(25,"map"                ),
+(26,"newspaperArticle"   ),
+(27,"note"               ),
+(28,"patent"             ),
+(29,"podcast"            ),
+(30,"preprint"           ),
+(31,"presentation"       ),
+(32,"radioBroadcast"     ),
+(33,"report"             ),
+(34,"statute"            ),
+(35,"thesis"             ),
+(36,"tvBroadcast"        ),
+(37,"videoRecording"     ),
+(38,"webpage"            ),
+(39,"dataset"            ),
+(40,"standard"           );
 ]]
 
 --[[
@@ -186,6 +186,12 @@ local ZOTERO_DB_INIT_LIBS = [[
 INSERT INTO libraries(type, editable, name) SELECT 'user',1,'' WHERE NOT EXISTS(SELECT libraryID FROM libraries);
 ]]
 
+local ZOTERO_DB_INIT_COLLECTIONS = [[
+-- only insert item if table is empty:
+-- 'Fake collection' for items in root
+INSERT INTO collections(collectionName, libraryID, key) SELECT '',1,'/' WHERE NOT EXISTS(SELECT collectionID FROM collections);
+]]
+
 local ZOTERO_GET_DOWNLOAD_QUEUE = [[
 select
     item_download_queue.key,
@@ -212,8 +218,8 @@ INSERT INTO itemData(itemID, value) SELECT itemID,jsonb(?2) FROM items WHERE key
 ]]
 
 local ZOTERO_DB_UPDATE_COLLECTION = [[
---INSERT INTO collections(collectionName, parentCollectionID, libraryID , key, version) SELECT ?1, collectionID, 1, ?3, ?4 FROM collections WHERE key=?2;
-INSERT INTO collections(collectionName, libraryID , key, version) VALUES(?1, 1, ?2, ?3);
+INSERT INTO collections(collectionName, parentCollectionID, libraryID , key, version) SELECT ?1, collectionID, 1, ?3, ?4 FROM collections WHERE key=?2;
+--INSERT INTO collections(collectionName, libraryID, key, version) VALUES(?1, 1, ?2, ?3);
 --INSERT INTO collections(key, value) VALUES(?,jsonb(?)) ON CONFLICT DO UPDATE SET value = excluded.value;
 ]]
 
@@ -235,13 +241,11 @@ local ZOTERO_REMOVE_OFFLINE_COLLECTION = [[ DELETE FROM offline_collections WHER
 
 local ZOTERO_QUERY_ITEMS = [[
 SELECT 
-    key,
-    collectionName || '/',
-    'collection'
-FROM collections;
-WHERE (?1 IS NULL AND parentCollectionID IS NULL)
-
---WHERE ((?1 IS NULL AND parent_key IS NULL) OR (?1 IS NOT NULL AND parent_key = ?1))
+	key, 
+	collectionName || '/', 
+	'collection' 
+	FROM (SELECT c.key, c.collectionName, p.key AS pkey FROM collections c INNER JOIN collections p ON c.parentCollectionID = p.collectionID) 
+WHERE pkey = ?1;
 --UNION ALL
 --SELECT key, name || title AS name, type FROM (
 --SELECT
@@ -381,11 +385,14 @@ function API.init(zotero_dir)
 		logger.info("Zotero db version is 0. Set up libraries")
 		db:exec(ZOTERO_DB_SCHEMA)
 		db:exec(ZOTERO_DB_INIT_LIBS)
+
 		local cnt, _ = db:exec("SELECT COUNT(*) FROM itemTypes")
 		print(cnt[1][1])
 		if cnt[1][1] == 0 then
 			db:exec(ZOTERO_DB_INIT_ITEMTYPES)
 		end
+		db:exec(ZOTERO_DB_INIT_COLLECTIONS)
+
 	end
     --db:exec(ZOTERO_CREATE_VIEWS)
 end
@@ -638,9 +645,9 @@ function API.syncAllItems(progress_callback)
             local collection = partial_entries[i].data
             local key = collection.key
 			print(collection.name, collection.key, collection.parentCollection,collection.version)
-			if collection.parentCollection == false then collection.parentCollection = nil end
---            stmt_update_collection:reset():bind(collection.name, collection.parentCollection, collection.key, collection.version):step()
-            stmt_update_collection:reset():bind(collection.name, collection.key, collection.version):step()
+			if collection.parentCollection == false then collection.parentCollection = '/' end
+            stmt_update_collection:reset():bind(collection.name, collection.parentCollection, collection.key, collection.version):step()
+--            stmt_update_collection:reset():bind(collection.name, collection.key, collection.version):step()
         end
     end)
     if e ~= nil then return e end
@@ -865,12 +872,12 @@ function API.displayCollection(key)
     stmt:reset()
     stmt:clearbind()
 
-    if key ~= nil then
-        stmt:bind1(1, key)
-        stmt:bind1(1, 1)
-	else
+    if key == nil then
+		key = '/'
         print("Key is nil")
     end
+	stmt:bind1(1, key)
+--	stmt:bind1(1, 1)
 
     local result = {}
     local row, _ = stmt:step({}, {})
