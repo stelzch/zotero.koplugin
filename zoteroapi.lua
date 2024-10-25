@@ -67,6 +67,13 @@ CREATE TABLE IF NOT EXISTS collections (
 	FOREIGN KEY (libraryID) REFERENCES libraries(libraryID) ON DELETE CASCADE,
 	FOREIGN KEY (parentCollectionID) REFERENCES collections(collectionID) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS collectionItems (
+	collectionID INT NOT NULL,
+	itemID INT NOT NULL,
+	PRIMARY KEY(collectionID, itemID), 
+	FOREIGN KEY (collectionID) REFERENCES collections(collectionID) ON DELETE CASCADE,
+	FOREIGN KEY (itemID) REFERENCES items(itemID) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS itemTypes ( 
 	itemTypeID INTEGER PRIMARY KEY, 
 	typeName TEXT, 
@@ -223,8 +230,14 @@ INSERT INTO collections(collectionName, parentCollectionID, libraryID , key, ver
 --INSERT INTO collections(key, value) VALUES(?,jsonb(?)) ON CONFLICT DO UPDATE SET value = excluded.value;
 ]]
 
+local ZOTERO_DB_UPDATE_COLLECTION_ITEMS = [[
+INSERT INTO collectionItems(collectionID, itemID) SELECT collections.collectionID, items.itemID FROM collections, items WHERE collections.key = ?1 AND items.key=?2;
+]]
+
 local ZOTERO_DB_DELETE = [[
+DELETE FROM libraries;
 DELETE FROM items;
+DELETE FROM itemData;
 DELETE FROM collections;
 DELETE FROM offline_collections;
 DELETE FROM attachment_versions;
@@ -240,22 +253,35 @@ local ZOTERO_ADD_OFFLINE_COLLECTION = [[ INSERT INTO offline_collections(key) VA
 local ZOTERO_REMOVE_OFFLINE_COLLECTION = [[ DELETE FROM offline_collections WHERE key = ?; ]]
 
 local ZOTERO_QUERY_ITEMS = [[
+WITH cid AS (SELECT collectionID AS ID FROM collections WHERE key = ?1) 
 SELECT 
 	key, 
 	collectionName || '/', 
 	'collection' 
-	FROM (SELECT c.key, c.collectionName, p.key AS pkey FROM collections c INNER JOIN collections p ON c.parentCollectionID = p.collectionID) 
-WHERE pkey = ?1;
---UNION ALL
---SELECT key, name || title AS name, type FROM (
---SELECT
-    --key,
-    --jsonb_extract(value, '$.data.title') AS title,
-    ---- if possible, prepend creator summary
-    --coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') AS name,
-    --iif(jsonb_extract(value, '$.data.itemType') = 'attachment', 'attachment', 'item') AS type
---FROM items
---WHERE
+--FROM (SELECT c.key, c.collectionName, p.key AS pkey FROM collections c INNER JOIN collections p ON c.parentCollectionID = p.collectionID) 
+--WHERE pkey = ?1
+FROM collections, cid 
+WHERE parentCollectionID = cid.ID
+UNION ALL
+SELECT 
+	key, 
+	name || title AS name, 
+	type 
+FROM (
+	SELECT
+	   items.key,
+		jsonb_extract(value, '$.title') AS title,
+		---- if possible, prepend creator summary
+		--coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') AS name,
+		'' AS name,
+		iif(items.itemTypeID = 3, 'attachment', 'item') AS type
+	FROM 
+		itemData INNER JOIN items ON itemData.itemID = items.itemID, cid
+	WHERE
+		itemData.itemID IN (SELECT itemID FROM collectionItems,cid WHERE collectionID = cid.ID
+	)
+);
+
 ---- don't display items in root collection
 --?1 IS NOT NULL
 ---- the item should not be deleted
@@ -626,7 +652,8 @@ function API.syncAllItems(progress_callback)
     local db = API.openDB()
     local stmt_update_item = db:prepare(ZOTERO_DB_UPDATE_ITEM)
     local stmt_update_itemData = db:prepare(ZOTERO_DB_UPDATE_ITEMDATA)
-
+	local stmt_update_collectionItems = db:prepare(ZOTERO_DB_UPDATE_COLLECTION_ITEMS)
+	
     local stmt_update_collection = db:prepare(ZOTERO_DB_UPDATE_COLLECTION)
     local since = API.getLibraryVersion()
 
@@ -666,6 +693,12 @@ function API.syncAllItems(progress_callback)
 --            stmt_update_item:reset():bind(1, 1, key, item.version):step()
             stmt_update_item:reset():bind(1, item.data.itemType, key, item.version):step()
             stmt_update_itemData:reset():bind(key, JSON.encode(item.data)):step()
+            if item.data.collections ~= nil then
+				local itemCol = item.data.collections[1]
+				if itemCol == nil then itemCol = '/' end
+				print("Item "..key.." is part of collection "..itemCol)
+				stmt_update_collectionItems:reset():bind(itemCol, key):step()
+			end
         end
     end)
     if e ~= nil then return e end
