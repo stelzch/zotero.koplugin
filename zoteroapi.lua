@@ -246,7 +246,8 @@ PRAGMA user_version = 0;
 
 local ZOTERO_GET_DB_VERSION = [[ PRAGMA user_version; ]]
 
-local ZOTERO_GET_ITEM = [[ SELECT json(items.value) FROM items WHERE key = ?; ]]
+local ZOTERO_GET_ITEM = [[ SELECT json(value) 	FROM 
+		itemData INNER JOIN items ON itemData.itemID = items.itemID WHERE items.key = ?; ]]
 
 local ZOTERO_GET_OFFLINE_COLLECTION = [[ SELECT key FROM offline_collections WHERE key = ?; ]]
 local ZOTERO_ADD_OFFLINE_COLLECTION = [[ INSERT INTO offline_collections(key) VALUES(?); ]]
@@ -258,8 +259,6 @@ SELECT
 	key, 
 	collectionName || '/', 
 	'collection' 
---FROM (SELECT c.key, c.collectionName, p.key AS pkey FROM collections c INNER JOIN collections p ON c.parentCollectionID = p.collectionID) 
---WHERE pkey = ?1
 FROM collections, cid 
 WHERE parentCollectionID = cid.ID
 UNION ALL
@@ -270,10 +269,9 @@ SELECT
 FROM (
 	SELECT
 	   items.key,
-		jsonb_extract(value, '$.title') AS title,
+		jsonb_extract(value, '$.data.title') AS title,
 		---- if possible, prepend creator summary
-		--coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') AS name,
-		'' AS name,
+		coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') AS name,
 		iif(items.itemTypeID = 3, 'attachment', 'item') AS type
 	FROM 
 		itemData INNER JOIN items ON itemData.itemID = items.itemID, cid
@@ -303,32 +301,32 @@ SELECT
     jsonb_extract(value, '$.data.title') AS title,
     -- if possible, prepend creator summary
     coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') AS name,
-    iif(jsonb_extract(value, '$.data.itemType') = 'attachment', 'attachment', 'item') AS type
-FROM items
+	iif(items.itemTypeID = 3, 'attachment', 'item') AS type
+FROM itemData INNER JOIN items ON itemData.itemID = items.itemID 
 WHERE
 -- the item should not be deleted
 (jsonb_extract(value, '$.data.deleted') IS NOT 1)
 -- and it must either be an attachment or have at least one attachment
-AND (jsonb_extract(value, '$.data.itemType') = 'attachment'
-     OR (SELECT COUNT(key) FROM items AS child
-            WHERE jsonb_extract(child.value, '$.data.parentItem') = items.key
-                  AND jsonb_extract(child.value, '$.data.itemType') = 'attachment'
-                  AND jsonb_extract(child.value, '$.data.deleted') IS NOT 1) > 0)
+AND (items.itemTypeID = 3)
+     --OR (SELECT COUNT(key) FROM items AS child
+            --WHERE jsonb_extract(child.value, '$.data.parentItem') = items.key
+                  --AND jsonb_extract(child.value, '$.data.itemType') = 'attachment'
+                  --AND jsonb_extract(child.value, '$.data.deleted') IS NOT 1) > 0)
 AND title LIKE ?1
 ORDER BY title;
 ]]
 
 local ZOTERO_GET_ATTACHMENTS = [[
 SELECT
-key,
-jsonb_extract(value, '$.data.filename') AS filename,
-(jsonb_extract(value, '$.data.contentType') = 'application/pdf') AS is_pdf
-FROM items
+	key,
+	jsonb_extract(value, '$.data.filename') AS filename,
+	(jsonb_extract(value, '$.data.contentType') = 'application/pdf') AS is_pdf
+FROM itemData INNER JOIN items ON itemData.itemID = items.itemID 
 WHERE
-jsonb_extract(value, '$.data.itemType') = 'attachment' AND
-jsonb_extract(value, '$.data.deleted') IS NOT 1 AND
-((key = ?1) OR (jsonb_extract(value, '$.data.parentItem') = ?1))
-ORDER BY is_pdf DESC, filename ASC;
+	items.itemTypeID = 3 AND
+	jsonb_extract(value, '$.data.deleted') IS NOT 1 AND
+	((key = ?1) OR (jsonb_extract(value, '$.data.parentItem') = ?1));
+--ORDER BY is_pdf DESC, filename ASC;
 ]]
 
 local ZOTERO_GET_VERSION = [[ SELECT version FROM attachment_versions WHERE key = ?; ]]
@@ -687,12 +685,16 @@ function API.syncAllItems(progress_callback)
             -- Ruthlessly update our local items
             local item = partial_entries[i]
             local key = item.key
+            
+            -- remove some unused data
+            item.links = nil
+            item.library = nil
 
 --            stmt_update_item:reset():bind(key, JSON.encode(item)):step()
 --            stmt_update_item:reset():bind(1, 1, key, item.version, JSON.encode(item)):step()
 --            stmt_update_item:reset():bind(1, 1, key, item.version):step()
             stmt_update_item:reset():bind(1, item.data.itemType, key, item.version):step()
-            stmt_update_itemData:reset():bind(key, JSON.encode(item.data)):step()
+            stmt_update_itemData:reset():bind(key, JSON.encode(item)):step()
             if item.data.collections ~= nil then
 				local itemCol = item.data.collections[1]
 				if itemCol == nil then itemCol = '/' end
@@ -732,6 +734,7 @@ function API.getItem(key)
     if nr == 0 then
         return nil
     else
+		--print(result[1][1])
         return JSON.decode(result[1][1])
     end
 end
@@ -906,11 +909,11 @@ function API.displayCollection(key)
     stmt:clearbind()
 
     if key == nil then
+		-- use fake key for root collection
 		key = '/'
-        print("Key is nil")
+        --print("Key is nil")
     end
 	stmt:bind1(1, key)
---	stmt:bind1(1, 1)
 
     local result = {}
     local row, _ = stmt:step({}, {})
@@ -920,14 +923,11 @@ function API.displayCollection(key)
             ["text"] = row[2],
             ["type"] = row[3],
         })
-		print(row[1], row[2], row[3])
+		--print(row[1], row[2], row[3])
         row = stmt:step(row)
     end
     stmt:close()
 	
---	local res, n = db:exec([[ SELECT  key, collectionName || '/', 'collection' FROM collections; ]])
-	local res, n = db:exec([[ SELECT  key FROM collections; ]])
-	print(n)
     return result
 end
 
