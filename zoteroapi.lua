@@ -79,6 +79,12 @@ CREATE TABLE IF NOT EXISTS itemTypes (
 	typeName TEXT, 
 	display INT DEFAULT 1 
 );
+CREATE TABLE IF NOT EXISTS itemAttachments ( 
+	itemID INTEGER PRIMARY KEY, 
+	parentItemID INT,
+	FOREIGN KEY (itemID) REFERENCES items(itemID) ON DELETE CASCADE,
+	FOREIGN KEY (parentItemID) REFERENCES items(itemID) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS offline_collections(
     key TEXT PRIMARY KEY
@@ -329,12 +335,21 @@ WHERE
 --ORDER BY is_pdf DESC, filename ASC;
 ]]
 
+local ZOTERO_INSERT_ITEM_ATTACHMENTS = [[
+INSERT INTO itemAttachments(itemID, parentItemID) SELECT i.itemID, p.itemID FROM items i, items p WHERE i.key = ?1 AND p.key=?2;
+]]
+
+local ZOTERO_GET_ITEM_VERSION = [[ SELECT itemID, version FROM items WHERE key = ?; ]]
+
 local ZOTERO_GET_VERSION = [[ SELECT version FROM attachment_versions WHERE key = ?; ]]
 local ZOTERO_SET_VERSION = [[
 INSERT INTO attachment_versions(key,version)
        VALUES(?,?)
        ON CONFLICT DO UPDATE SET version = excluded.version;
 ]];
+
+-- to check whether changes where made
+local ZOTERO_DB_CHANGES = [[ SELECT changes() ]]
 
 local function file_exists(path)
     if path == nil then return nil end
@@ -647,23 +662,30 @@ end
 
 function API.syncAllItems(progress_callback)
     local callback = progress_callback or function() end
-    local db = API.openDB()
-    local stmt_update_item = db:prepare(ZOTERO_DB_UPDATE_ITEM)
-    local stmt_update_itemData = db:prepare(ZOTERO_DB_UPDATE_ITEMDATA)
-	local stmt_update_collectionItems = db:prepare(ZOTERO_DB_UPDATE_COLLECTION_ITEMS)
-	
-    local stmt_update_collection = db:prepare(ZOTERO_DB_UPDATE_COLLECTION)
-    local since = API.getLibraryVersion()
 
+    local db = API.openDB()
+    local since = API.getLibraryVersion()
+	print("Local Zotero lib version: "..since)
+	
     local e, api_key, user_id = API.ensureKeyAndID()
     if e ~= nil then return e end
-
+    
+	local stmt_update_item = db:prepare(ZOTERO_DB_UPDATE_ITEM)
+    local stmt_update_itemData = db:prepare(ZOTERO_DB_UPDATE_ITEMDATA)
+	local stmt_update_collectionItems = db:prepare(ZOTERO_DB_UPDATE_COLLECTION_ITEMS)
+	local stmt_get_ItemVersion = db:prepare(ZOTERO_GET_ITEM_VERSION)
+	
+    -- to check whether changes where made
+	local stmt_changes = db:prepare(ZOTERO_DB_CHANGES)
+	
     local headers = API.getHeaders(api_key)
     local items_url = ("https://api.zotero.org/users/%s/items?since=%s&includeTrashed=true"):format(user_id, since)
     local collections_url = ("https://api.zotero.org/users/%s/collections?since=%s&includeTrashed=true"):format(user_id, since)
 
     -- Sync library collections
-    r, e = API.fetchCollectionPaginated(collections_url, headers, function(partial_entries, percentage)
+	local stmt_update_collection = db:prepare(ZOTERO_DB_UPDATE_COLLECTION)
+
+    local r, e = API.fetchCollectionPaginated(collections_url, headers, function(partial_entries, percentage)
         callback(string.format("Syncing collections %.0f%%", percentage))
         for i = 1, #partial_entries do
             -- Ruthlessly update our local items
@@ -675,38 +697,60 @@ function API.syncAllItems(progress_callback)
 --            stmt_update_collection:reset():bind(collection.name, collection.key, collection.version):step()
         end
     end)
+    stmt_update_collection:close()
     if e ~= nil then return e end
-
+	
+	local attachments = {}
+	
     -- Sync library items
-    local r, e
     r, e = API.fetchCollectionPaginated(items_url, headers, function(partial_entries, percentage)
         callback(string.format("Syncing items %.0f%%", percentage))
         for i = 1, #partial_entries do
             -- Ruthlessly update our local items
             local item = partial_entries[i]
             local key = item.key
+            local res, cnt = stmt_get_ItemVersion:reset():bind(key):step()
+            if res ~= nil then 
+            -- we have a local version already; should do something different?
+				print(res[1][1], cnt) 
+			else
+				print("New item: "..key)
+			end
             
-            -- remove some unused data
-            item.links = nil
-            item.library = nil
+            if item.data.deleted == 1 then
+				print("Item "..key.." has been deleted.")
+			else
+				-- remove some unused data
+				item.links = nil
+				item.library = nil
 
---            stmt_update_item:reset():bind(key, JSON.encode(item)):step()
---            stmt_update_item:reset():bind(1, 1, key, item.version, JSON.encode(item)):step()
---            stmt_update_item:reset():bind(1, 1, key, item.version):step()
-            stmt_update_item:reset():bind(1, item.data.itemType, key, item.version):step()
-            stmt_update_itemData:reset():bind(key, JSON.encode(item)):step()
-            if item.data.collections ~= nil then
-				local itemCol = item.data.collections[1]
-				if itemCol == nil then itemCol = '/' end
-				print("Item "..key.." is part of collection "..itemCol)
-				stmt_update_collectionItems:reset():bind(itemCol, key):step()
+				stmt_update_item:reset():bind(1, item.data.itemType, key, item.version):step()
+				local cnt = stmt_changes:reset():step()
+				if cnt ~= nil then 
+					print("Changes: ", tonumber(cnt[1]))
+				end
+				stmt_update_itemData:reset():bind(key, JSON.encode(item)):step()
+				if item.data.collections ~= nil then
+					local itemCol = item.data.collections[1]
+					if itemCol == nil then itemCol = '/' end
+					print("Item "..key.." is part of collection "..itemCol)
+					stmt_update_collectionItems:reset():bind(itemCol, key):step()
+				end
+				if item.data.itemType == 'attachment' then
+					attachments[key] = item.data.parentItem
+				end
 			end
         end
     end)
     if e ~= nil then return e end
 
     API.setLibraryVersion(r)
-
+	
+	local stmt_insert_attachments = db:prepare(ZOTERO_INSERT_ITEM_ATTACHMENTS)
+	for item, parent in pairs(attachments) do
+--		print("Attachments: ",item,", ",parent)
+		stmt_insert_attachments:reset():bind(item, parent):step()
+	end
     --API.batchDownload(callback)
     --API.syncAnnotations()
 
@@ -734,7 +778,7 @@ function API.getItem(key)
     if nr == 0 then
         return nil
     else
-		--print(result[1][1])
+		print(result[1][1])
         return JSON.decode(result[1][1])
     end
 end
