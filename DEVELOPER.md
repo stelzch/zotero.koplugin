@@ -16,6 +16,21 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 
 - [] Support extra meta data, e.g. tags or all autors
 
+## Random coding details:
+
+- [] Make use of 'itemAttachments' table
+	- [] use it to track synched version
+	- [] use it to identify children
+	- [] Store all attachment details in there?
+	
+- [] Make an 'itemAnnotation' table
+
+- [] remove redundant code
+
+- [] proper implementation of libraries
+	- [] set user and ID
+	- [] use it to store version
+
 
 # Known issues:
 
@@ -36,3 +51,5 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 - [] If an item has several attachments, to one opened by default (1st?) might not be the one you want
 	- Workaround: long click should present a list of all attachments
 	- Plan: define an order/default attachment? What does desktop client do?
+	
+- [] Collection deletion not implemented yet; currently requires complete re-sync
