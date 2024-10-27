@@ -1,19 +1,22 @@
 # Overview
 
-Changed the sqlite data base structure such that the DB is aware of the relationship between different entities. Hopefully this will make it easier to propagate changes (e.g. deletion of a parent item removing attachments from view, etc).
+Changed the sqlite data base structure such that it is aware of the relationship between different entities. Hopefully this will make it easier to propagate changes (e.g. deletion of a parent item removing attachments from view, etc).
 The layout of the DB is loosely based on the one of the Zotero desktop client without implementing the advanced features.
 To maintain compatibility the item info is still saved as a JSON blob in a separate table (itemData), which might become redundant at some point...
  
 # Development plan:
 
 - [x] Get basic library sync functionality to work
+
 	Mostly implemented (except deletion of collections) on 27/10/24
 
 - [] Display Zotero annotations on Koreader
 
+	Rough implementation working 27/10/24
+
 - [] Fix known issues listed below
 
-- [] Save searches?
+- [] Saved searches?
 
 - [] Support extra meta data, e.g. tags or all autors
 
@@ -24,9 +27,9 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 	- [] use it to identify children
 	- [] Store all attachment details in there?
 	
-- [] Make an 'itemAnnotation' table
+- [x] Make an 'itemAnnotation' table
 	- [] use it to track synced version
-	- [] use it to identify children
+	- [x] use it to identify children
 
 - [] remove redundant code
 
