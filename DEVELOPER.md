@@ -6,7 +6,8 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
  
 # Development plan:
 
-- [] Get basic library sync functionality to work
+- [x] Get basic library sync functionality to work
+	Mostly implemented (except deletion of collections) on 27/10/24
 
 - [] Display Zotero annotations on Koreader
 
@@ -16,14 +17,16 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 
 - [] Support extra meta data, e.g. tags or all autors
 
-## Random coding details:
+### Random coding details:
 
 - [] Make use of 'itemAttachments' table
-	- [] use it to track synched version
+	- [] use it to track synced version
 	- [] use it to identify children
 	- [] Store all attachment details in there?
 	
 - [] Make an 'itemAnnotation' table
+	- [] use it to track synced version
+	- [] use it to identify children
 
 - [] remove redundant code
 
@@ -34,12 +37,12 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 
 # Known issues:
 
-- [] 'All items' or search results don't open (inherited from devStelzch)
+- [] 'All items' or search results don't open when clicked (inherited from devStelzch)
 
 - [] Search returns deleted items (inherited from devStelzch)
 
 - [] Offline collection functionality is currently disabled
-	- Plan: use 'sync' collumn in collections table
+	- Plan: use 'sync' column in collections table
 
 - [] Annotation sync to Zotero is currently disabled
 
@@ -48,7 +51,7 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 	- Workaround: delete zotero.db
 	- Plan: maybe implement this programatically: delete (or better move db to backup file) to initiate re-sync?
 	
-- [] If an item has several attachments, to one opened by default (1st?) might not be the one you want
+- [] If an item has several attachments, the one opened by default (1st?) might not be the one you want
 	- Workaround: long click should present a list of all attachments
 	- Plan: define an order/default attachment? What does desktop client do?
 	
