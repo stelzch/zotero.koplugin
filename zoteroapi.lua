@@ -30,8 +30,7 @@ local SUPPORTED_MEDIA_TYPES = {
 
 local ZOTERO_DB_SCHEMA = [[
 CREATE TABLE IF NOT EXISTS itemData (
-	itemID INTEGER,    
-    --key TEXT PRIMARY KEY,
+	itemID INTEGER PRIMARY KEY,    
     value BLOB,
     FOREIGN KEY (itemID) REFERENCES items(itemID) ON DELETE CASCADE
 );
@@ -220,24 +219,30 @@ local ZOTERO_GET_LOCAL_PDF_ITEMS = [[ SELECT * FROM local_pdf_items; ]]
 local ZOTERO_GET_LOCAL_PDF_ITEMS_SIZE = [[ SELECT COUNT(*) FROM local_pdf_items; ]]
 
 local ZOTERO_DB_UPDATE_ITEM = [[
---INSERT INTO items(itemTypeID, libraryID, key, version) VALUES(?1, ?2, ?3, ?4);
-INSERT INTO items(itemTypeID, libraryID, key, version) SELECT itemTypeID, ?1, ?3, ?4 FROM itemTypes WHERE typeName IS ?2
---INSERT INTO itemData(itemID, value) SELECT itemID,jsonb(?5) FROM items WHERE key IS ?3 ON CONFLICT DO UPDATE SET value = excluded.value;
+INSERT INTO items(itemTypeID, libraryID, key, version) SELECT itemTypeID, ?1, ?3, ?4 FROM itemTypes WHERE typeName IS ?2 
+ON CONFLICT DO UPDATE SET itemTypeID = excluded.itemTypeID, version = excluded.version;
+]]
+local ZOTERO_DB_DELETE_ITEM = [[
+DELETE FROM items WHERE key IS ?1
 ]]
 
 local ZOTERO_DB_UPDATE_ITEMDATA = [[
---INSERT INTO items(itemTypeID, libraryID, key, version) VALUES(?1, ?2, ?3, ?4);
-INSERT INTO itemData(itemID, value) SELECT itemID,jsonb(?2) FROM items WHERE key IS ?1 ON CONFLICT DO UPDATE SET value = excluded.value;
+INSERT INTO itemData(itemID, value) SELECT itemID,jsonb(?2) FROM items WHERE key IS ?1 
+ON CONFLICT DO UPDATE SET value = excluded.value;
 ]]
 
 local ZOTERO_DB_UPDATE_COLLECTION = [[
-INSERT INTO collections(collectionName, parentCollectionID, libraryID , key, version) SELECT ?1, collectionID, 1, ?3, ?4 FROM collections WHERE key=?2;
---INSERT INTO collections(collectionName, libraryID, key, version) VALUES(?1, 1, ?2, ?3);
---INSERT INTO collections(key, value) VALUES(?,jsonb(?)) ON CONFLICT DO UPDATE SET value = excluded.value;
+-- hardcoded libraryID = 1 for now
+INSERT INTO collections(collectionName, parentCollectionID, libraryID , key, version) SELECT ?1, collectionID, 1, ?3, ?4 FROM collections WHERE key=?2
+ON CONFLICT DO UPDATE SET collectionName = excluded.collectionName, version = excluded.version, parentCollectionID = excluded.parentCollectionID;
+]]
+local ZOTERO_DB_DELETE_COLLECTION = [[
+DELETE FROM collections WHERE key IS ?1
 ]]
 
 local ZOTERO_DB_UPDATE_COLLECTION_ITEMS = [[
-INSERT INTO collectionItems(collectionID, itemID) SELECT collections.collectionID, items.itemID FROM collections, items WHERE collections.key = ?1 AND items.key=?2;
+INSERT INTO collectionItems(collectionID, itemID) SELECT collections.collectionID, items.itemID FROM collections, items WHERE collections.key = ?1 AND items.key=?2
+ON CONFLICT DO NOTHING;
 ]]
 
 local ZOTERO_DB_DELETE = [[
@@ -392,6 +397,8 @@ function API.openDB()
     else
         API.db = SQ3.open(API.db_path)
 --        API.db:exec(ZOTERO_CREATE_VIEWS)
+		API.db:exec("PRAGMA foreign_keys=ON")
+		logger.info("Zotero: db opened with foreign keys enabled: ", unpack(API.db:exec("PRAGMA foreign_keys")[1]))
         return API.db
     end
 
@@ -421,12 +428,11 @@ function API.init(zotero_dir)
     logger.info("Zotero: opening db path ", API.db_path)
     local db = API.openDB()
     if API.getLibraryVersion() == 0 then
-		logger.info("Zotero db version is 0. Set up libraries")
+		logger.info("Zotero: db version is 0. Set up libraries.")
 		db:exec(ZOTERO_DB_SCHEMA)
 		db:exec(ZOTERO_DB_INIT_LIBS)
 
 		local cnt, _ = db:exec("SELECT COUNT(*) FROM itemTypes")
-		print(cnt[1][1])
 		if cnt[1][1] == 0 then
 			db:exec(ZOTERO_DB_INIT_ITEMTYPES)
 		end
@@ -674,6 +680,7 @@ function API.syncAllItems(progress_callback)
     local stmt_update_itemData = db:prepare(ZOTERO_DB_UPDATE_ITEMDATA)
 	local stmt_update_collectionItems = db:prepare(ZOTERO_DB_UPDATE_COLLECTION_ITEMS)
 	local stmt_get_ItemVersion = db:prepare(ZOTERO_GET_ITEM_VERSION)
+	local stmt_delete_item = db:prepare(ZOTERO_DB_DELETE_ITEM)
 	
     -- to check whether changes where made
 	local stmt_changes = db:prepare(ZOTERO_DB_CHANGES)
@@ -695,6 +702,11 @@ function API.syncAllItems(progress_callback)
 			if collection.parentCollection == false then collection.parentCollection = '/' end
             stmt_update_collection:reset():bind(collection.name, collection.parentCollection, collection.key, collection.version):step()
 --            stmt_update_collection:reset():bind(collection.name, collection.key, collection.version):step()
+			local cnt = stmt_changes:reset():step()
+			if cnt ~= nil then 
+				print("Changes: ", tonumber(cnt[1]))
+			end
+
         end
     end)
     stmt_update_collection:close()
@@ -709,16 +721,23 @@ function API.syncAllItems(progress_callback)
             -- Ruthlessly update our local items
             local item = partial_entries[i]
             local key = item.key
-            local res, cnt = stmt_get_ItemVersion:reset():bind(key):step()
+            local res = stmt_get_ItemVersion:reset():bind(key):step()
             if res ~= nil then 
             -- we have a local version already; should do something different?
-				print(res[1][1], cnt) 
+				logger.info("Zotero: update for local item "..key..": itemID ", tonumber(res[1]), ", version ", tonumber(res[2]) ) 
 			else
-				print("New item: "..key)
+				logger.info("New item: "..key)
 			end
             
             if item.data.deleted == 1 then
 				print("Item "..key.." has been deleted.")
+				if res ~= nil then
+					stmt_delete_item:reset():bind(key):step()
+					local cnt = stmt_changes:reset():step()
+					if cnt ~= nil then 
+						logger.info("Changes: ", tonumber(cnt[1]))
+					end
+				end
 			else
 				-- remove some unused data
 				item.links = nil
@@ -733,7 +752,7 @@ function API.syncAllItems(progress_callback)
 				if item.data.collections ~= nil then
 					local itemCol = item.data.collections[1]
 					if itemCol == nil then itemCol = '/' end
-					print("Item "..key.." is part of collection "..itemCol)
+					logger.info("Item "..key.." is part of collection "..itemCol)
 					stmt_update_collectionItems:reset():bind(itemCol, key):step()
 				end
 				if item.data.itemType == 'attachment' then
