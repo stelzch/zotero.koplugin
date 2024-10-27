@@ -6,23 +6,33 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
  
 # Development plan:
 
-- Get basic library sync functionality to work
+- [] Get basic library sync functionality to work
 
-- Display Zotero annotations on Koreader
+- [] Display Zotero annotations on Koreader
 
-- Sync back local annotations
+- [] Fix known issues listed below
+
+- [] Save searches?
+
+- [] Support extra meta data, e.g. tags or all autors
 
 
 # Known issues:
 
-- 'All items' or search results don't open (inherited from devStelzch)
+- [] 'All items' or search results don't open (inherited from devStelzch)
 
-- Search returns deleted items (inherited from devStelzch)
+- [] Search returns deleted items (inherited from devStelzch)
 
-- Offline collection functionality is currently disabled
+- [] Offline collection functionality is currently disabled
+	- Plan: use 'sync' collumn in collections table
 
-- Annotation sync to Zotero is currently disabled
+- [] Annotation sync to Zotero is currently disabled
 
-- Re-sync library function currently not working:
+- [] Re-sync library function currently not working:
 	- 'collections' table is empty after re-sync for some reason.
 	- Workaround: delete zotero.db
+	- Plan: maybe implement this programatically: delete (or better move db to backup file) to initiate re-sync?
+	
+- [] If an item has several attachments, to one opened by default (1st?) might not be the one you want
+	- Workaround: long click should present a list of all attachments
+	- Plan: define an order/default attachment? What does desktop client do?
