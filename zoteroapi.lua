@@ -756,7 +756,8 @@ function API.syncAllItems(progress_callback)
 					stmt_update_collectionItems:reset():bind(itemCol, key):step()
 				end
 				if item.data.itemType == 'attachment' then
-					attachments[key] = item.data.parentItem
+				-- if there is no parent item then use the item as its own parent
+					attachments[key] = item.data.parentItem or key
 				end
 			end
         end
@@ -765,11 +766,17 @@ function API.syncAllItems(progress_callback)
 
     API.setLibraryVersion(r)
 	
-	local stmt_insert_attachments = db:prepare(ZOTERO_INSERT_ITEM_ATTACHMENTS)
-	for item, parent in pairs(attachments) do
---		print("Attachments: ",item,", ",parent)
-		stmt_insert_attachments:reset():bind(item, parent):step()
+	-- deal with attachment items:
+	local next = next	
+	if next(attachments) ~= nil then
+	-- there are attachments
+		local stmt_insert_attachments = db:prepare(ZOTERO_INSERT_ITEM_ATTACHMENTS)
+		for item, parent in pairs(attachments) do
+			stmt_insert_attachments:reset():bind(item, parent):step()
+		end
+		stmt_insert_attachments:close()
 	end
+	
     --API.batchDownload(callback)
     --API.syncAnnotations()
 
