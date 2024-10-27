@@ -81,6 +81,14 @@ CREATE TABLE IF NOT EXISTS itemTypes (
 CREATE TABLE IF NOT EXISTS itemAttachments ( 
 	itemID INTEGER PRIMARY KEY, 
 	parentItemID INT,
+	syncedVersion INT NOT NULL DEFAULT 0,
+	FOREIGN KEY (itemID) REFERENCES items(itemID) ON DELETE CASCADE,
+	FOREIGN KEY (parentItemID) REFERENCES items(itemID) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS itemAnnotations ( 
+	itemID INTEGER PRIMARY KEY, 
+	parentItemID INT,
+	syncedVersion INT NOT NULL DEFAULT 0,
 	FOREIGN KEY (itemID) REFERENCES items(itemID) ON DELETE CASCADE,
 	FOREIGN KEY (parentItemID) REFERENCES items(itemID) ON DELETE CASCADE
 );
@@ -339,9 +347,24 @@ WHERE
 	((key = ?1) OR (jsonb_extract(value, '$.data.parentItem') = ?1));
 --ORDER BY is_pdf DESC, filename ASC;
 ]]
-
+local ZOTERO_GET_ITEM_ANNOTATIONS_INFO = [[
+SELECT
+	key,
+	version,
+	syncedVersion
+FROM 
+	itemAnnotations INNER JOIN items ON itemAnnotations.itemID = items.itemID 
+WHERE
+	itemAnnotations.parentItemID IN (SELECT itemID FROM items WHERE key = ?1);
+]]
 local ZOTERO_INSERT_ITEM_ATTACHMENTS = [[
 INSERT INTO itemAttachments(itemID, parentItemID) SELECT i.itemID, p.itemID FROM items i, items p WHERE i.key = ?1 AND p.key=?2;
+ON CONFLICT DO UPDATE SET parentItemID = excluded.parentItemID;
+]]
+
+local ZOTERO_INSERT_ITEM_ANNOTATIONS = [[
+INSERT INTO itemAnnotations(itemID, parentItemID) SELECT i.itemID, p.itemID FROM items i, items p WHERE i.key = ?1 AND p.key=?2;
+ON CONFLICT DO UPDATE SET parentItemID = excluded.parentItemID;
 ]]
 
 local ZOTERO_GET_ITEM_VERSION = [[ SELECT itemID, version FROM items WHERE key = ?; ]]
@@ -398,7 +421,7 @@ function API.openDB()
         API.db = SQ3.open(API.db_path)
 --        API.db:exec(ZOTERO_CREATE_VIEWS)
 		API.db:exec("PRAGMA foreign_keys=ON")
-		logger.info("Zotero: db opened with foreign keys enabled: ", unpack(API.db:exec("PRAGMA foreign_keys")[1]))
+		logger.info("Zotero: db opened with foreign keys enabled: ", tonumber(unpack(API.db:exec("PRAGMA foreign_keys")[1])))
         return API.db
     end
 
@@ -713,6 +736,7 @@ function API.syncAllItems(progress_callback)
     if e ~= nil then return e end
 	
 	local attachments = {}
+	local annotations = {}
 	
     -- Sync library items
     r, e = API.fetchCollectionPaginated(items_url, headers, function(partial_entries, percentage)
@@ -758,6 +782,8 @@ function API.syncAllItems(progress_callback)
 				if item.data.itemType == 'attachment' then
 				-- if there is no parent item then use the item as its own parent
 					attachments[key] = item.data.parentItem or key
+				elseif item.data.itemType == 'annotation' then
+					annotations[key] = item.data.parentItem
 				end
 			end
         end
@@ -776,6 +802,17 @@ function API.syncAllItems(progress_callback)
 		end
 		stmt_insert_attachments:close()
 	end
+	
+	-- deal with annotation items:
+	if next(annotations) ~= nil then
+	-- there are annotations
+		local stmt_insert_annotations = db:prepare(ZOTERO_INSERT_ITEM_ANNOTATIONS)
+		for item, parent in pairs(annotations) do
+			stmt_insert_annotations:reset():bind(item, parent):step()
+		end
+		stmt_insert_annotations:close()
+	end
+
 	
     --API.batchDownload(callback)
     --API.syncAnnotations()
