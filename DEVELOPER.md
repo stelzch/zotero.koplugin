@@ -40,9 +40,13 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 
 # Known issues:
 
-- [] 'All items' or search results don't open when clicked (inherited from devStelzch)
+- [x] 'All items' or search results don't open when clicked (inherited from devStelzch)
 
-- [] Search returns deleted items (inherited from devStelzch)
+	Fixed 29/10/24
+	
+- [x] Search returns deleted items (inherited from devStelzch)
+
+	Fixed 29/10/24
 
 - [] Offline collection functionality is currently disabled
 	- Plan: use 'sync' column in collections table

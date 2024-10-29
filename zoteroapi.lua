@@ -299,8 +299,9 @@ FROM (
 	FROM 
 		itemData INNER JOIN items ON itemData.itemID = items.itemID, cid
 	WHERE
-		itemData.itemID IN (SELECT itemID FROM collectionItems,cid WHERE collectionID = cid.ID
-	)
+		itemData.itemID IN (
+			SELECT itemID FROM collectionItems,cid WHERE collectionID = cid.ID
+		)
 );
 
 ---- don't display items in root collection
@@ -321,20 +322,20 @@ FROM (
 local ZOTERO_SEARCH_ITEMS = [[
 SELECT
     key,
-    jsonb_extract(value, '$.data.title') AS title,
     -- if possible, prepend creator summary
-    coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') AS name,
-	iif(items.itemTypeID = 3, 'attachment', 'item') AS type
+    coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', jsonb_extract(value, '$.data.title')) AS title,
+	iif(itemTypeID = 3, 'attachment', 'item') AS type
 FROM itemData INNER JOIN items ON itemData.itemID = items.itemID 
 WHERE
--- the item should not be deleted
-(jsonb_extract(value, '$.data.deleted') IS NOT 1)
--- and it must either be an attachment or have at least one attachment
-AND (items.itemTypeID = 3)
-     --OR (SELECT COUNT(key) FROM items AS child
-            --WHERE jsonb_extract(child.value, '$.data.parentItem') = items.key
-                  --AND jsonb_extract(child.value, '$.data.itemType') = 'attachment'
-                  --AND jsonb_extract(child.value, '$.data.deleted') IS NOT 1) > 0)
+--	items.itemID IN (SELECT parentItemID FROM itemAttachments)
+	-- the item should not be deleted
+	(jsonb_extract(value, '$.data.deleted') IS NOT 1)
+	-- and it must either be an attachment or have at least one attachment
+	AND (items.itemTypeID = 3)
+     ----OR (SELECT COUNT(key) FROM items AS child
+            ----WHERE jsonb_extract(child.value, '$.data.parentItem') = items.key
+                  ----AND jsonb_extract(child.value, '$.data.itemType') = 'attachment'
+                  ----AND jsonb_extract(child.value, '$.data.deleted') IS NOT 1) > 0)
 AND title LIKE ?1
 ORDER BY title;
 ]]
@@ -845,7 +846,7 @@ function API.getItem(key)
     if nr == 0 then
         return nil
     else
-		print(result[1][1])
+		--print(result[1][1])
         return JSON.decode(result[1][1])
     end
 end
@@ -1122,7 +1123,7 @@ function API.displaySearchResults(query)
         row = stmt:step(row)
     end
     stmt:close()
-
+	print(JSON.encode(result))
     return result
 end
 
@@ -1332,7 +1333,6 @@ function API.syncItemAnnotations(item, annotation_callback)
 		local stmt_get_ItemAnnotationInfo = db:prepare(ZOTERO_GET_ITEM_ANNOTATIONS_INFO)
 
 		local row = stmt_get_ItemAnnotationInfo:bind(itemKey):step()
---		local i = 1
 		while row ~= nil do
 			local key = row[1]
 			local versi = row[2]
@@ -1340,14 +1340,6 @@ function API.syncItemAnnotations(item, annotation_callback)
 			zotCount = zotCount + 1
 			row = stmt_get_ItemAnnotationInfo:step(row)
 		end
-        --for annotationKey, annotation in pairs(items) do
-            --if annotation.data.parentItem == itemKey
-                --and annotation.data.itemType == "annotation"
-                --and annotation.data.annotationType == "highlight" then
-                --zoteroItems[annotationKey] = { ["status"] = "newerRemote" }
-                --zotCount = zotCount + 1
-            --end
-        --end
         print(JSON.encode(zoteroItems))
         if zotCount > 0 then
             print("Found "..zotCount.." zotero annotations.")
@@ -1356,14 +1348,8 @@ function API.syncItemAnnotations(item, annotation_callback)
         end
     end
     
-    --print("Keys: \""..keysToString(zoteroItems).."\"")
-    --API.verifyKeyAccess()
-    
-    -- Add them to the docsettings 
-    -- NOTE: Currently annotations that are not already there just get overwritten
-    -- TO_DO: Should update existing one and sync back changes and new annotations
-    local docSettings = DocSettings:open(filePath)
-    
+	-- Find all the annotations that KOReader knows about from DocSettings
+    local docSettings = DocSettings:open(filePath)    
     local koreaderAnnotations = docSettings:readSetting("annotations", {})
     print(#koreaderAnnotations.." KOReader Annotations. ")
 
@@ -1387,7 +1373,6 @@ function API.syncItemAnnotations(item, annotation_callback)
                     localMods = localMods + 1
                 else -- it's a bookmark (or even s/t else?)
                     logger.dbg("Zotero: Ignoring bookmark: "..ann.text)
-                    koreaderAnnotations[idx].zoteroSortIndex = string.format("%05d|%05d|00000", ann.page-1, idx)
                 end
             end
         end
