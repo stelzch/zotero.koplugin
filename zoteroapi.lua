@@ -323,19 +323,19 @@ local ZOTERO_SEARCH_ITEMS = [[
 SELECT
     key,
     -- if possible, prepend creator summary
-    coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', jsonb_extract(value, '$.data.title')) AS title,
+    coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') || jsonb_extract(value, '$.data.title') AS title,
 	iif(itemTypeID = 3, 'attachment', 'item') AS type
 FROM itemData INNER JOIN items ON itemData.itemID = items.itemID 
 WHERE
---	items.itemID IN (SELECT parentItemID FROM itemAttachments)
-	-- the item should not be deleted
-	(jsonb_extract(value, '$.data.deleted') IS NOT 1)
-	-- and it must either be an attachment or have at least one attachment
-	AND (items.itemTypeID = 3)
-     ----OR (SELECT COUNT(key) FROM items AS child
-            ----WHERE jsonb_extract(child.value, '$.data.parentItem') = items.key
-                  ----AND jsonb_extract(child.value, '$.data.itemType') = 'attachment'
-                  ----AND jsonb_extract(child.value, '$.data.deleted') IS NOT 1) > 0)
+	itemData.itemID IN (SELECT parentItemID FROM itemAttachments)
+	---- the item should not be deleted
+	--(jsonb_extract(value, '$.data.deleted') IS NOT 1)
+	---- and it must either be an attachment or have at least one attachment
+	--AND (items.itemTypeID = 3)
+     ------OR (SELECT COUNT(key) FROM items AS child
+            ------WHERE jsonb_extract(child.value, '$.data.parentItem') = items.key
+                  ------AND jsonb_extract(child.value, '$.data.itemType') = 'attachment'
+                  ------AND jsonb_extract(child.value, '$.data.deleted') IS NOT 1) > 0)
 AND title LIKE ?1
 ORDER BY title;
 ]]
