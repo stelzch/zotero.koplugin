@@ -303,19 +303,6 @@ FROM (
 			SELECT itemID FROM collectionItems,cid WHERE collectionID = cid.ID
 		)
 );
-
----- don't display items in root collection
---?1 IS NOT NULL
----- the item should not be deleted
---AND (jsonb_extract(value, '$.data.deleted') IS NOT 1)
----- the item must belong to the collection we query
---AND (?1 IN (SELECT value FROM json_each(jsonb_extract(items.value, '$.data.collections'))))
----- and it must either be an attachment or have at least one attachment
---AND (jsonb_extract(value, '$.data.itemType') = 'attachment'
-     --OR (SELECT COUNT(key) FROM items AS child
-            --WHERE jsonb_extract(child.value, '$.data.parentItem') = items.key
-                  --AND jsonb_extract(child.value, '$.data.itemType') = 'attachment'
-                  --AND jsonb_extract(child.value, '$.data.deleted') IS NOT 1) > 0)
 --ORDER BY title);
 ]]
 
@@ -328,14 +315,6 @@ SELECT
 FROM itemData INNER JOIN items ON itemData.itemID = items.itemID 
 WHERE
 	itemData.itemID IN (SELECT parentItemID FROM itemAttachments)
-	---- the item should not be deleted
-	--(jsonb_extract(value, '$.data.deleted') IS NOT 1)
-	---- and it must either be an attachment or have at least one attachment
-	--AND (items.itemTypeID = 3)
-     ------OR (SELECT COUNT(key) FROM items AS child
-            ------WHERE jsonb_extract(child.value, '$.data.parentItem') = items.key
-                  ------AND jsonb_extract(child.value, '$.data.itemType') = 'attachment'
-                  ------AND jsonb_extract(child.value, '$.data.deleted') IS NOT 1) > 0)
 AND title LIKE ?1
 ORDER BY title;
 ]]
@@ -345,13 +324,12 @@ SELECT
 	key,
 	jsonb_extract(value, '$.data.filename') AS filename,
 	(jsonb_extract(value, '$.data.contentType') = 'application/pdf') AS is_pdf
-FROM itemData INNER JOIN items ON itemData.itemID = items.itemID 
+FROM (itemAttachments INNER JOIN itemData ON itemData.itemID = itemAttachments.itemID) INNER JOIN items ON itemData.itemID = items.itemID 
 WHERE
-	items.itemTypeID = 3 AND
-	jsonb_extract(value, '$.data.deleted') IS NOT 1 AND
-	((key = ?1) OR (jsonb_extract(value, '$.data.parentItem') = ?1));
+	itemAttachments.parentItemID IN (SELECT itemID FROM items WHERE key = ?1);
 --ORDER BY is_pdf DESC, filename ASC;
 ]]
+
 local ZOTERO_GET_ITEM_ANNOTATIONS_INFO = [[
 SELECT
 	key,
@@ -362,6 +340,7 @@ FROM
 WHERE
 	itemAnnotations.parentItemID IN (SELECT itemID FROM items WHERE key = ?1);
 ]]
+
 local ZOTERO_INSERT_ITEM_ATTACHMENTS = [[
 INSERT INTO itemAttachments(itemID, parentItemID) SELECT i.itemID, p.itemID FROM items i, items p WHERE i.key = ?1 AND p.key=?2;
 ON CONFLICT DO UPDATE SET parentItemID = excluded.parentItemID;
