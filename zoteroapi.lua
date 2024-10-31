@@ -1304,7 +1304,11 @@ end
 
 -- Sync annotations for specified item from Zotero with sdr folder
 function API.syncItemAnnotations(item, annotation_callback)
---    local items = API.getItems()
+
+	if item.data.contentType ~= SUPPORTED_MEDIA_TYPES[1] then
+        return "Warning: Can only sync annotations for pdf files for now"
+    end
+	
 	local itemKey = item.key
     local fileDir, filePath = API.getDirAndPath(item)
 
@@ -1383,8 +1387,12 @@ function API.syncItemAnnotations(item, annotation_callback)
         for key, idx in pairs(localZotAnn) do
             local item = API.getItem(key)
             local ann = koreaderAnnotations[idx]
-            zoteroItems[key].position = idx
             if item ~= nil then
+	            if zoteroItems[key] ~= nil then
+					zoteroItems[key].position = idx
+				else
+					zoteroItems[key] = { ["position"] = idx }
+				end
                 if item.version > ann.zoteroVersion then
                     print("Database item is newer. Overwrite local version of "..key)
                     zoteroItems[key].status = "newerRemote"
@@ -1401,7 +1409,7 @@ function API.syncItemAnnotations(item, annotation_callback)
                 end
             else
                 print("Annotation has been deleted in Zotero "..key)
-                zoteroItems[key].status = "deletedRemote"        
+                zoteroItems[key] = { ["status"] = "deletedRemote" }      
             end
         end
         -- Check with the remote list of annotations to see if there are any new ones or local deletions...
