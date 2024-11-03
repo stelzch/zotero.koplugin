@@ -50,6 +50,8 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 
 - [] Offline collection functionality is currently disabled
 	- Plan: use 'sync' column in collections table
+	[x] use synced column in collections table
+	[] change routines that select offline collections to update sync column
 	
 - [] Opening non-pdf files currently leads to a crash if there are annotations as the page size routines do not work
 
