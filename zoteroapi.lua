@@ -273,8 +273,14 @@ local ZOTERO_GET_ITEM = [[ SELECT json(value) 	FROM
 		itemData INNER JOIN items ON itemData.itemID = items.itemID WHERE items.key = ?; ]]
 
 local ZOTERO_GET_OFFLINE_COLLECTION = [[ SELECT key FROM offline_collections WHERE key = ?; ]]
-local ZOTERO_ADD_OFFLINE_COLLECTION = [[ INSERT INTO offline_collections(key) VALUES(?); ]]
-local ZOTERO_REMOVE_OFFLINE_COLLECTION = [[ DELETE FROM offline_collections WHERE key = ?; ]]
+
+local ZOTERO_ADD_OFFLINE_COLLECTION = [[ 
+INSERT INTO offline_collections(key) VALUES(?); 
+]]
+
+local ZOTERO_REMOVE_OFFLINE_COLLECTION = [[ 
+DELETE FROM offline_collections WHERE key = ?; 
+]]
 
 local ZOTERO_QUERY_ITEMS = [[
 WITH cid AS (SELECT collectionID AS ID FROM collections WHERE key = ?1) 
@@ -306,6 +312,44 @@ FROM (
 --ORDER BY title);
 ]]
 
+local ZOTERO_GET_COLLECTION_ITEMS = [[
+WITH cid AS (SELECT collectionID AS ID FROM collections WHERE key = ?1) 
+SELECT
+   items.key,
+	---- if possible, prepend creator summary
+	coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') || jsonb_extract(value, '$.data.title') AS title,
+	iif(items.itemTypeID = 3, 'attachment', 'item') AS type
+FROM 
+	itemData INNER JOIN items ON itemData.itemID = items.itemID, cid
+WHERE
+	itemData.itemID IN (
+		SELECT itemID FROM collectionItems,cid WHERE collectionID = cid.ID
+	)
+;
+--ORDER BY title);
+]]
+
+
+local ZOTERO_GET_OFFLINE_COLLECTION_ATTACHMENTS = [[
+SELECT
+   items.key,
+	---- if possible, prepend creator summary
+	coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') || jsonb_extract(value, '$.data.title') AS title,
+	iif(items.itemTypeID = 3, 'attachment', 'item') AS type
+FROM 
+	itemData INNER JOIN items ON itemData.itemID = items.itemID
+WHERE
+	itemData.itemID IN (
+		SELECT ItemID 
+		FROM itemAttachments 
+		WHERE
+			parentItemID IN (
+				SELECT itemID 
+				FROM collectionItems INNER JOIN collections ON collections.collectionID = collectionItems.collectionID 
+				WHERE synced = 1)  
+	);
+]]
+
 local ZOTERO_SEARCH_ITEMS = [[
 SELECT
     key,
@@ -319,7 +363,7 @@ AND title LIKE ?1
 ORDER BY title;
 ]]
 
-local ZOTERO_GET_ATTACHMENTS = [[
+local ZOTERO_GET_ITEM_ATTACHMENTS = [[
 SELECT
 	key,
 	jsonb_extract(value, '$.data.filename') AS filename,
@@ -798,7 +842,7 @@ function API.syncAllItems(progress_callback)
 	end
 
 	
-    --API.batchDownload(callback)
+    API.batchDownload(callback)
     --API.syncAnnotations()
 
     return nil
@@ -832,7 +876,7 @@ end
 
 function API.getItemAttachments(key)
     local db = API.openDB()
-    local stmt = db:prepare(ZOTERO_GET_ATTACHMENTS)
+    local stmt = db:prepare(ZOTERO_GET_ITEM_ATTACHMENTS)
     stmt:reset()
     stmt:bind1(1, key)
 
@@ -967,26 +1011,40 @@ end
 function API.batchDownload(progress_callback)
     local db = API.openDB()
 
-    local item_count = db:exec(ZOTERO_GET_DOWNLOAD_QUEUE_SIZE)[1][1]
+    --local item_count = db:exec(ZOTERO_GET_DOWNLOAD_QUEUE_SIZE)[1][1]
 
-    local stmt = db:prepare(ZOTERO_GET_DOWNLOAD_QUEUE)
-    stmt:reset()
+    local stmt = db:prepare(ZOTERO_GET_OFFLINE_COLLECTION_ATTACHMENTS)
 
-    local row, nr = stmt:step({}, {})
-    local i = 1
-    while row ~= nil do
-        local download_key = row[1]
-        local filename = row[2]
-        progress_callback(string.format(_("Downloading attachment %i/%i"), i, item_count))
-        local path, e = API.downloadAndGetPath(download_key, nil)
+	local result, item_count = stmt:reset():resultset()
+	
+	logger.info("Zotero:", item_count, "offline items to download") 
+	for i=1,item_count do
+		local download_key = result[1][i]
+		local filename = result[2][i]
+		progress_callback(string.format(_("Downloading attachment %i/%i"), i, item_count))
+		local path, e = API.downloadAndGetPath(download_key, nil)
 
-        if e ~= nil then
-            progress_callback(string.format(_("Error downloading attachment %s: %s"), filename, e))
-        end
+		if e ~= nil then
+			progress_callback(string.format(_("Error downloading attachment %s: %s"), filename, e))
+		end
+	end
 
-        row = stmt:step(row)
-        i = i + 1
-    end
+
+    --local row, nr = stmt:step({}, {})
+    --local i = 1
+    --while row ~= nil do
+        --local download_key = row[1]
+        --local filename = row[2]
+        --progress_callback(string.format(_("Downloading attachment %i/%i"), i, item_count))
+        --local path, e = API.downloadAndGetPath(download_key, nil)
+
+        --if e ~= nil then
+            --progress_callback(string.format(_("Error downloading attachment %s: %s"), filename, e))
+        --end
+
+        --row = stmt:step(row)
+        --i = i + 1
+    --end
 end
 
 -- Convert a Zotero annotation item to a KOReader annotation
