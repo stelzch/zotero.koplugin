@@ -9,7 +9,7 @@ local SQ3 = require("lua-ljsqlite3/init")
 local logger = require("logger")
 local Annotations = require("annotations")
 local _ = require("gettext")
--- For ,y annotation routines:
+-- For my annotation routines:
 local DocSettings = require("docsettings")
 local Geom = require("ui/geometry")
 
@@ -97,9 +97,9 @@ CREATE TABLE IF NOT EXISTS itemAnnotations (
 	FOREIGN KEY (parentItemID) REFERENCES items(itemID) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS offline_collections(
-    key TEXT PRIMARY KEY
-);
+--CREATE TABLE IF NOT EXISTS offline_collections(
+    --key TEXT PRIMARY KEY
+--);
 
 CREATE TABLE IF NOT EXISTS attachment_versions(
     key TEXT PRIMARY KEY,
@@ -262,7 +262,7 @@ DELETE FROM libraries;
 DELETE FROM items;
 DELETE FROM itemData;
 DELETE FROM collections;
-DELETE FROM offline_collections;
+--DELETE FROM offline_collections;
 DELETE FROM attachment_versions;
 PRAGMA user_version = 0;
 ]]
@@ -272,14 +272,23 @@ local ZOTERO_GET_DB_VERSION = [[ PRAGMA user_version; ]]
 local ZOTERO_GET_ITEM = [[ SELECT json(value) 	FROM 
 		itemData INNER JOIN items ON itemData.itemID = items.itemID WHERE items.key = ?; ]]
 
-local ZOTERO_GET_OFFLINE_COLLECTION = [[ SELECT key FROM offline_collections WHERE key = ?; ]]
+local ZOTERO_GET_OFFLINE_COLLECTION = [[ 
+SELECT key FROM collections WHERE (synced > 0) AND (key = ?);
+--SELECT key FROM offline_collections WHERE key = ?; 
+]]
 
 local ZOTERO_ADD_OFFLINE_COLLECTION = [[ 
-INSERT INTO offline_collections(key) VALUES(?); 
+UPDATE collections
+SET synced = 1
+WHERE key=?;
+--INSERT INTO offline_collections(key) VALUES(?); 
 ]]
 
 local ZOTERO_REMOVE_OFFLINE_COLLECTION = [[ 
-DELETE FROM offline_collections WHERE key = ?; 
+UPDATE collections
+SET synced = 0
+WHERE key=?;
+--DELETE FROM offline_collections WHERE key = ?; 
 ]]
 
 local ZOTERO_QUERY_ITEMS = [[
