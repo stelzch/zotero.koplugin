@@ -96,11 +96,6 @@ CREATE TABLE IF NOT EXISTS itemAnnotations (
 	FOREIGN KEY (itemID) REFERENCES items(itemID) ON DELETE CASCADE,
 	FOREIGN KEY (parentItemID) REFERENCES items(itemID) ON DELETE CASCADE
 );
-
---CREATE TABLE IF NOT EXISTS offline_collections(
-    --key TEXT PRIMARY KEY
---);
-
 CREATE TABLE IF NOT EXISTS attachment_versions(
     key TEXT PRIMARY KEY,
     version INTEGER
@@ -205,8 +200,8 @@ WHERE
 ]]
 --]]
 
+-- Make sure there is at least one item in libraries table: ony insert if table is empty:
 local ZOTERO_DB_INIT_LIBS = [[
--- only insert item if table is empty:
 INSERT INTO libraries(type, editable, name) SELECT 'user',1,'' WHERE NOT EXISTS(SELECT libraryID FROM libraries);
 ]]
 
@@ -251,11 +246,15 @@ ON CONFLICT DO UPDATE SET collectionName = excluded.collectionName, version = ex
 local ZOTERO_DB_DELETE_COLLECTION = [[
 DELETE FROM collections WHERE key IS ?1
 ]]
-
+local ZOTERO_DB_UPDATE_PARENTCOLLECTION = [[
+-- assume libraryID = 1 for now
+UPDATE collections SET parentCollectionID = (SELECT collectionID FROM collections WHERE key = ?2) WHERE key=?1;
+]]
 local ZOTERO_DB_UPDATE_COLLECTION_ITEMS = [[
 INSERT INTO collectionItems(collectionID, itemID) SELECT collections.collectionID, items.itemID FROM collections, items WHERE collections.key = ?1 AND items.key=?2
 ON CONFLICT DO NOTHING;
 ]]
+local ZOTERO_GET_COLLECTION_VERSION = [[ SELECT collectionID, version FROM collections WHERE key = ?; ]]
 
 local ZOTERO_DB_DELETE = [[
 DELETE FROM libraries;
@@ -274,21 +273,18 @@ local ZOTERO_GET_ITEM = [[ SELECT json(value) 	FROM
 
 local ZOTERO_GET_OFFLINE_COLLECTION = [[ 
 SELECT key FROM collections WHERE (synced > 0) AND (key = ?);
---SELECT key FROM offline_collections WHERE key = ?; 
 ]]
 
 local ZOTERO_ADD_OFFLINE_COLLECTION = [[ 
 UPDATE collections
 SET synced = 1
 WHERE key=?;
---INSERT INTO offline_collections(key) VALUES(?); 
 ]]
 
 local ZOTERO_REMOVE_OFFLINE_COLLECTION = [[ 
 UPDATE collections
 SET synced = 0
 WHERE key=?;
---DELETE FROM offline_collections WHERE key = ?; 
 ]]
 
 local ZOTERO_QUERY_ITEMS = [[
@@ -459,6 +455,27 @@ function API.openDB()
 --        API.db:exec(ZOTERO_CREATE_VIEWS)
 		API.db:exec("PRAGMA foreign_keys=ON")
 		logger.info("Zotero: db opened with foreign keys enabled: ", tonumber(unpack(API.db:exec("PRAGMA foreign_keys")[1])))
+		if API.getLibraryVersion() == 0 then
+			logger.info("Zotero: db version is 0. Set up tables.")
+			API.db:exec(ZOTERO_DB_SCHEMA)
+			logger.info("Zotero: Set up user library.")
+			API.db:rowexec(ZOTERO_DB_INIT_LIBS)
+			local cnt = API.db:rowexec(ZOTERO_DB_CHANGES)
+			if cnt ~= nil then 
+				logger.info("Changes in libraries table: ", tonumber(cnt))
+			end
+			local cnt = API.db:rowexec("SELECT COUNT(*) FROM itemTypes")
+			if cnt == 0 then
+				logger.info("Zotero: Set up user itemTypes.")
+				API.db:exec(ZOTERO_DB_INIT_ITEMTYPES)
+				local cnt = API.db:rowexec(ZOTERO_DB_CHANGES)
+				if cnt ~= nil then 
+					logger.info("Changes in itemTypes table: ", tonumber(cnt))
+				end
+			end
+			logger.info("Zotero: Set up root collection.")
+			API.db:exec(ZOTERO_DB_INIT_COLLECTIONS)
+		end
         return API.db
     end
 
@@ -487,18 +504,7 @@ function API.init(zotero_dir)
     API.db_path = BaseUtil.joinPath(API.zotero_dir, "zotero.db")
     logger.info("Zotero: opening db path ", API.db_path)
     local db = API.openDB()
-    if API.getLibraryVersion() == 0 then
-		logger.info("Zotero: db version is 0. Set up libraries.")
-		db:exec(ZOTERO_DB_SCHEMA)
-		db:exec(ZOTERO_DB_INIT_LIBS)
 
-		local cnt, _ = db:exec("SELECT COUNT(*) FROM itemTypes")
-		if cnt[1][1] == 0 then
-			db:exec(ZOTERO_DB_INIT_ITEMTYPES)
-		end
-		db:exec(ZOTERO_DB_INIT_COLLECTIONS)
-
-	end
     --db:exec(ZOTERO_CREATE_VIEWS)
 end
 
@@ -731,7 +737,7 @@ function API.syncAllItems(progress_callback)
 
     local db = API.openDB()
     local since = API.getLibraryVersion()
-	print("Local Zotero lib version: "..since)
+	logger.info("Local Zotero lib version: "..since)
 	
     local e, api_key, user_id = API.ensureKeyAndID()
     if e ~= nil then return e end
@@ -749,8 +755,13 @@ function API.syncAllItems(progress_callback)
     local items_url = ("https://api.zotero.org/users/%s/items?since=%s&includeTrashed=true"):format(user_id, since)
     local collections_url = ("https://api.zotero.org/users/%s/collections?since=%s&includeTrashed=true"):format(user_id, since)
 
+	local next = next	
+    
     -- Sync library collections
 	local stmt_update_collection = db:prepare(ZOTERO_DB_UPDATE_COLLECTION)
+	local stmt_delete_collection = db:prepare(ZOTERO_DB_DELETE_COLLECTION)
+	local stmt_get_collectionVersion = db:prepare(ZOTERO_GET_COLLECTION_VERSION)
+	local nestedCollections = {}
 
     local r, e = API.fetchCollectionPaginated(collections_url, headers, function(partial_entries, percentage)
         callback(string.format("Syncing collections %.0f%%", percentage))
@@ -758,24 +769,57 @@ function API.syncAllItems(progress_callback)
             -- Ruthlessly update our local items
             local collection = partial_entries[i].data
             local key = collection.key
-			print(collection.name, collection.key, collection.parentCollection,collection.version)
-			if collection.parentCollection == false then collection.parentCollection = '/' end
-            stmt_update_collection:reset():bind(collection.name, collection.parentCollection, collection.key, collection.version):step()
---            stmt_update_collection:reset():bind(collection.name, collection.key, collection.version):step()
-			local cnt = stmt_changes:reset():step()
-			if cnt ~= nil then 
-				print("Changes: ", tonumber(cnt[1]))
+            -- for collections Zotero seems to use collection.deleted = true
+			logger.info(JSON.encode(collection))
+			if collection.deleted then
+				logger.info("Collection "..key.." has been deleted.")
+				local localVersion = stmt_get_collectionVersion:reset():bind(key):step()
+				if localVersion ~= nil then
+					stmt_delete_collection:reset():bind(key):step()
+					local cnt = stmt_changes:reset():step()
+					if cnt ~= nil then 
+						logger.info("Changes: ", tonumber(cnt[1]))
+					end
+				end
+			else
+				-- collection has not been deleted
+				if collection.parentCollection == false then 
+					collection.parentCollection = '/' 
+				else 
+					-- For nested collections sometimes the parent collection is not in the database yet.
+					-- In this case insert would fail. So set parentCollection to root to start with and
+					-- set the proper value once all the collections are in the db
+					nestedCollections[key] = collection.parentCollection
+					collection.parentCollection = '/'
+				end
+				stmt_update_collection:reset():bind(collection.name, collection.parentCollection, collection.key, collection.version):step()
+				local cnt = stmt_changes:reset():step()
+				if cnt ~= nil then 
+					logger.info("Collection changes: ", tonumber(cnt[1]))
+				end
 			end
-
         end
     end)
     stmt_update_collection:close()
-    if e ~= nil then return e end
 	
+	-- deal with nested collections. 
+	-- Now that the db for sure has entries for all collections we can safely set parent collections
+	if next(nestedCollections) ~= nil then
+	-- there are nestedCollections
+		local stmt_update_parentCollection = db:prepare(ZOTERO_DB_UPDATE_PARENTCOLLECTION)
+		for item, parent in pairs(nestedCollections) do
+			stmt_update_parentCollection:reset():bind(item, parent):step()
+		end
+		stmt_update_parentCollection:close()
+	end
+    if e ~= nil then return e end
+		
+	---------------------
+    -- Sync library items
+    
 	local attachments = {}
 	local annotations = {}
 	
-    -- Sync library items
     r, e = API.fetchCollectionPaginated(items_url, headers, function(partial_entries, percentage)
         callback(string.format("Syncing items %.0f%%", percentage))
         for i = 1, #partial_entries do
@@ -830,7 +874,6 @@ function API.syncAllItems(progress_callback)
     API.setLibraryVersion(r)
 	
 	-- deal with attachment items:
-	local next = next	
 	if next(attachments) ~= nil then
 	-- there are attachments
 		local stmt_insert_attachments = db:prepare(ZOTERO_INSERT_ITEM_ATTACHMENTS)
@@ -1175,8 +1218,13 @@ end
 
 
 function API.resetSyncState()
-    local db = API.openDB()
-    db:exec(ZOTERO_DB_DELETE)
+    API.closeDB()
+    local bak_path = BaseUtil.joinPath(API.zotero_dir, "zotero.db.old")
+    if not os.rename(API.db_path, bak_path) then
+		os.delete(API.db_path)
+	end
+    --local db = API.openDB()
+    --db:exec(ZOTERO_DB_DELETE)    
 end
 
 
@@ -1190,6 +1238,7 @@ function API.isOfflineCollection(key)
 
     return (nr > 0)
 end
+
 
 function API.addOfflineCollection(key)
     local db = API.openDB()
@@ -1218,6 +1267,7 @@ function API.getAttachmentVersion(key)
     end
 
 end
+
 
 function API.setAttachmentVersion(key, version)
     local db = API.openDB()

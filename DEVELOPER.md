@@ -18,7 +18,7 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 
 - [] Saved searches?
 
-- [] Support extra meta data, e.g. tags or all autors
+- [] Support extra meta data, e.g. tags or all authors
 
 ### Random coding details:
 
