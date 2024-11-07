@@ -147,47 +147,51 @@ VALUES
 (40,"standard"           );
 ]]
 
---[[
-local ZOTERO_CREATE_VIEWS = [[ 
-CREATE TEMPORARY TABLE IF NOT EXISTS supported_media_types (mime TEXT);
-INSERT INTO supported_media_types(mime) VALUES ('application/pdf'), ('application/epub+zip'), ('text/html') ON CONFLICT DO NOTHING;
 
+--local ZOTERO_CREATE_VIEWS = [[ 
+--CREATE TEMPORARY TABLE IF NOT EXISTS supported_media_types (mime TEXT);
+--INSERT INTO supported_media_types(mime) VALUES ('application/pdf'), ('application/epub+zip'), ('text/html') ON CONFLICT DO NOTHING;
+
+--CREATE TEMPORARY TABLE IF NOT EXISTS supported_link_types (type TEXT);
+--INSERT INTO supported_link_types(type) VALUES ('imported_file'), ('imported_url') ON CONFLICT DO NOTHING;
+
+---- create view that holds metadata of the parent item. if it does not exist, it is equal to the item itself
+--CREATE TEMPORARY VIEW IF NOT EXISTS attachment_data AS
+--SELECT items.key AS key, items.value AS value, parents.key AS parent_key, coalesce(parents.value, items.value) AS parent_value
+--FROM items
+--LEFT JOIN items AS parents ON jsonb_extract(items.value, '$.data.parentItem') = parents.key
+--WHERE
+--(jsonb_extract(items.value, '$.data.itemType')  = 'attachment');
+
+
+--CREATE TEMPORARY VIEW IF NOT EXISTS item_download_queue AS
+---- A collection is a offline collection if it is in the respective table or any of its parent collections are 
+---- in the respective table
+--WITH RECURSIVE collection_hierarchy(key) AS
+ --(SELECT key FROM offline_collections -- starting values are all collections inside the offline_collections table
+  --UNION
+  --SELECT collections.key              -- select all other keys of collections
+  --FROM collections, collection_hierarchy 
+  --WHERE jsonb_extract(collections.value, '$.data.parentCollection') = collection_hierarchy.key) -- whose parentCollection is the collection we just inserted
+--SELECT attachment_data.key FROM attachment_data
+--LEFT JOIN attachment_versions ON attachment_data.key = attachment_versions.key
+--WHERE
+---- must be an attachment with supported media type
+--(jsonb_extract(value, '$.data.itemType') = 'attachment') AND
+--(jsonb_extract(value, '$.data.linkMode') IN (SELECT type FROM supported_link_types)) AND
+--(jsonb_extract(value, '$.data.contentType') IN (SELECT mime FROM supported_media_types)) AND
+---- the item may not be deleted
+--(jsonb_extract(value, '$.data.deleted') IS NOT 1)
+---- and must belong to a collection in the offline collection hierarchy
+--AND EXISTS (SELECT collection_hierarchy.key FROM collection_hierarchy INTERSECT SELECT value FROM json_each(jsonb_extract(attachment_data.parent_value, '$.data.collections')))
+---- and local version must be lower than remote version (otherwise its considered up-to-date)
+--AND coalesce((SELECT version FROM attachment_versions WHERE attachment_versions.key = attachment_data.key), 0) < jsonb_extract(attachment_data.value, '$.version');
+
+-- select all pdf attachments present locally
+local ZOTERO_CREATE_VIEWS = [[ 
 CREATE TEMPORARY TABLE IF NOT EXISTS supported_link_types (type TEXT);
 INSERT INTO supported_link_types(type) VALUES ('imported_file'), ('imported_url') ON CONFLICT DO NOTHING;
 
--- create view that holds metadata of the parent item. if it does not exist, it is equal to the item itself
-CREATE TEMPORARY VIEW IF NOT EXISTS attachment_data AS
-SELECT items.key AS key, items.value AS value, parents.key AS parent_key, coalesce(parents.value, items.value) AS parent_value
-FROM items
-LEFT JOIN items AS parents ON jsonb_extract(items.value, '$.data.parentItem') = parents.key
-WHERE
-(jsonb_extract(items.value, '$.data.itemType')  = 'attachment');
-
-
-CREATE TEMPORARY VIEW IF NOT EXISTS item_download_queue AS
--- A collection is a offline collection if it is in the respective table or any of its parent collections are 
--- in the respective table
-WITH RECURSIVE collection_hierarchy(key) AS
- (SELECT key FROM offline_collections -- starting values are all collections inside the offline_collections table
-  UNION
-  SELECT collections.key              -- select all other keys of collections
-  FROM collections, collection_hierarchy 
-  WHERE jsonb_extract(collections.value, '$.data.parentCollection') = collection_hierarchy.key) -- whose parentCollection is the collection we just inserted
-SELECT attachment_data.key FROM attachment_data
-LEFT JOIN attachment_versions ON attachment_data.key = attachment_versions.key
-WHERE
--- must be an attachment with supported media type
-(jsonb_extract(value, '$.data.itemType') = 'attachment') AND
-(jsonb_extract(value, '$.data.linkMode') IN (SELECT type FROM supported_link_types)) AND
-(jsonb_extract(value, '$.data.contentType') IN (SELECT mime FROM supported_media_types)) AND
--- the item may not be deleted
-(jsonb_extract(value, '$.data.deleted') IS NOT 1)
--- and must belong to a collection in the offline collection hierarchy
-AND EXISTS (SELECT collection_hierarchy.key FROM collection_hierarchy INTERSECT SELECT value FROM json_each(jsonb_extract(attachment_data.parent_value, '$.data.collections')))
--- and local version must be lower than remote version (otherwise its considered up-to-date)
-AND coalesce((SELECT version FROM attachment_versions WHERE attachment_versions.key = attachment_data.key), 0) < jsonb_extract(attachment_data.value, '$.version');
-
--- select all pdf attachments present locally
 CREATE TEMPORARY VIEW IF NOT EXISTS local_pdf_items AS
 SELECT
     items.key AS key,
@@ -402,6 +406,15 @@ ON CONFLICT DO UPDATE SET parentItemID = excluded.parentItemID;
 
 local ZOTERO_GET_ITEM_VERSION = [[ SELECT itemID, version FROM items WHERE key = ?; ]]
 
+local ZOTERO_GET_ATTACHMENT_VERSION = [[ 
+SELECT items.itemID, version, syncedVersion 
+FROM itemAttachments INNER JOIN items ON itemAttachments.itemID = items.itemID 
+WHERE key = ?;
+]]
+local ZOTERO_SET_ATTACHMENT_SYNCEDVERSION = [[ 
+UPDATE itemAttachments SET syncedVersion = ?2 WHERE itemID = ?1
+]]
+
 local ZOTERO_GET_VERSION = [[ SELECT version FROM attachment_versions WHERE key = ?; ]]
 local ZOTERO_SET_VERSION = [[
 INSERT INTO attachment_versions(key,version)
@@ -452,7 +465,7 @@ function API.openDB()
         return API.db
     else
         API.db = SQ3.open(API.db_path)
---        API.db:exec(ZOTERO_CREATE_VIEWS)
+		API.db:exec(ZOTERO_CREATE_VIEWS)
 		API.db:exec("PRAGMA foreign_keys=ON")
 		logger.info("Zotero: db opened with foreign keys enabled: ", tonumber(unpack(API.db:exec("PRAGMA foreign_keys")[1])))
 		if API.getLibraryVersion() == 0 then
@@ -895,7 +908,7 @@ function API.syncAllItems(progress_callback)
 
 	
     API.batchDownload(callback)
-    --API.syncAnnotations()
+    API.syncAnnotations()
 
     return nil
 end
@@ -978,9 +991,10 @@ function API.downloadAndGetPath(key, download_callback)
     local targetDir, targetPath = API.getDirAndPath(item)
     lfs.mkdir(targetDir)
 
-    local local_version = API.getAttachmentVersion(key)
-
+    local itemID, itemVersion, local_version = API.getAttachmentVersion(key)
+	print(itemID, itemVersion, local_version, "item.version: "..item.version)
     if local_version ~= nil and local_version >= item.version and file_exists(targetPath) then
+		logger.info("Up-to-date local file. No need for download.")
 		API.syncItemAnnotations(item)
         return targetPath, nil -- all done, local file is up to date
     end
@@ -1006,7 +1020,7 @@ function API.downloadAndGetPath(key, download_callback)
         if e ~= nil then return nil, e end
     end
 
-    API.setAttachmentVersion(key, item.version)
+    API.setAttachmentVersion(itemID, item.version)
 
 	API.syncItemAnnotations(item)
 
@@ -1255,24 +1269,25 @@ end
 
 function API.getAttachmentVersion(key)
     local db = API.openDB()
-    local stmt = db:prepare(ZOTERO_GET_VERSION)
+--    local stmt = db:prepare(ZOTERO_GET_VERSION)
+    local stmt = db:prepare(ZOTERO_GET_ATTACHMENT_VERSION)
     local result, nr = stmt:reset():bind(key):resultset()
-
     stmt:close()
 
     if nr == 0 then
         return nil
     else
-        return result[1][1]
+        return tonumber(result[1][1]), tonumber(result[2][1]), tonumber(result[3][1])
     end
 
 end
 
 
-function API.setAttachmentVersion(key, version)
+function API.setAttachmentVersion(id, version)
     local db = API.openDB()
-    local stmt = db:prepare(ZOTERO_SET_VERSION)
-    stmt:reset():bind(key, version):step()
+--    local stmt = db:prepare(ZOTERO_SET_VERSION)
+	local stmt = db:prepare(ZOTERO_SET_ATTACHMENT_SYNCEDVERSION)
+    stmt:reset():bind(id, version):step()
     stmt:close()
 end
 
