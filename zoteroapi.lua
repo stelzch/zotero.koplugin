@@ -404,15 +404,27 @@ INSERT INTO itemAnnotations(itemID, parentItemID) SELECT i.itemID, p.itemID FROM
 ON CONFLICT DO UPDATE SET parentItemID = excluded.parentItemID;
 ]]
 
-local ZOTERO_GET_ITEM_VERSION = [[ SELECT itemID, version FROM items WHERE key = ?; ]]
+local ZOTERO_GET_ITEM_VERSION = [[ SELECT version, itemID FROM items WHERE key = ?; ]]
 
+-- Return synced version accoring to database for item identified by its key. Also return lastest version and itemID 
 local ZOTERO_GET_ATTACHMENT_VERSION = [[ 
-SELECT items.itemID, version, syncedVersion 
+SELECT syncedVersion, version, items.itemID
 FROM itemAttachments INNER JOIN items ON itemAttachments.itemID = items.itemID 
 WHERE key = ?;
 ]]
+
+-- set synced version using the itemID (not key!) as the 1st aparameter, and verison number as the 2nd
 local ZOTERO_SET_ATTACHMENT_SYNCEDVERSION = [[ 
 UPDATE itemAttachments SET syncedVersion = ?2 WHERE itemID = ?1
+]]
+
+-- Return key and filenames for all locally synced attachments. 
+local ZOTERO_GET_LOCAL_ATTACHMENT = [[ 
+SELECT
+	key,
+	jsonb_extract(value, '$.data.filename')
+FROM (itemAttachments INNER JOIN itemData ON itemData.itemID = itemAttachments.itemID) INNER JOIN items ON itemData.itemID = items.itemID 
+WHERE itemAttachments.syncedVersion > 0;
 ]]
 
 local ZOTERO_GET_VERSION = [[ SELECT version FROM attachment_versions WHERE key = ?; ]]
@@ -991,7 +1003,7 @@ function API.downloadAndGetPath(key, download_callback)
     local targetDir, targetPath = API.getDirAndPath(item)
     lfs.mkdir(targetDir)
 
-    local itemID, itemVersion, local_version = API.getAttachmentVersion(key)
+    local local_version, itemVersion, itemID = API.getAttachmentVersion(key)
 	print(itemID, itemVersion, local_version, "item.version: "..item.version)
     if local_version ~= nil and local_version >= item.version and file_exists(targetPath) then
 		logger.info("Up-to-date local file. No need for download.")
@@ -1293,30 +1305,34 @@ end
 
 function API.syncAnnotations(progress_callback)
     local db = API.openDB()
-    local item_count = db:exec(ZOTERO_GET_LOCAL_PDF_ITEMS_SIZE)[1][1]
+--    local item_count = db:exec(ZOTERO_GET_LOCAL_PDF_ITEMS_SIZE)[1][1]
 
 
-    local stmt = db:prepare(ZOTERO_GET_LOCAL_PDF_ITEMS)
+    --local stmt = db:prepare(ZOTERO_GET_LOCAL_PDF_ITEMS)
+	local stmt = db:prepare(ZOTERO_GET_LOCAL_ATTACHMENT)
+    --stmt:reset()
+    --stmt:clearbind()
+    
 
-    stmt:reset()
-    stmt:clearbind()
+    local files, item_count = stmt:resultset()
+--    print(item_count, unpack(files[1]), unpack(files[2]))
+--    local i = 1
 
-    local row, _ = stmt:step({}, {})
-    local i = 1
-    while row ~= nil do
-        local key = row[1]
-        local filename = row[2]
-
+    for i = 1, item_count do
+        local key = files[1][i]
+        local filename = files[2][i]
+		print(key, filename)
         local file_path = API.storage_dir .. "/" .. key .. "/" .. filename
         Annotations.createAnnotations(file_path, key, API.createItems)
-        row = stmt:step(row)
+--        row = stmt:step(row)
 
         if progress_callback ~= nil and (i == 1 or i % 10 == 0 or i == item_count) then
             progress_callback(string.format(_("Syncing annotations of file %i/%i"), i, item_count))
         end
 
-        i = i + 1
+--        i = i + 1
     end
+    --]]
     stmt:close()
 end
 
@@ -1571,8 +1587,8 @@ function API.syncItemAnnotations(item, annotation_callback)
                 table.insert(koreaderAnnotations, zotero2KoreaderAnnotation(API.getItem(key), pageDims.h))
             end
         else
-            for itemKey, itemInfo in pairs(zoteroItems) do
-            print("Updating item ", itemKey, itemInfo.status)
+            for key, itemInfo in pairs(zoteroItems) do
+            print("Updating item ", key, itemInfo.status)
                 if itemInfo.status == "newerRemote" then
                     koreaderAnnotations[itemInfo.position] = zotero2KoreaderAnnotation(API.getItem(key), pageDims.h)
                 elseif itemInfo.status == "deletedRemote" then
