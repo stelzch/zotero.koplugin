@@ -179,7 +179,7 @@ function Annotations.createAnnotations(file_path, key, creation_callback)
     -- gather page numbers beforehand so that we may determine page sizes in a
     -- single go
     for i=1,#k_annotations do
-        local pageno = k_annotations[i].pageno
+        local pageno = k_annotations[i].pageno or k_annotations[i].page  -- not sure what is the difference between page and pageno
         pages[pageno] = true
     end
 
