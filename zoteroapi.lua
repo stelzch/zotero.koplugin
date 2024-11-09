@@ -767,6 +767,11 @@ function API.syncAllItems(progress_callback)
     local e, api_key, user_id = API.ensureKeyAndID()
     if e ~= nil then return e end
     
+    if since > 0 then 
+    -- try to sync back first, so that any changes will be recorded when we update te db later on
+		API.syncAnnotations()
+	end
+	
 	local stmt_update_item = db:prepare(ZOTERO_DB_UPDATE_ITEM)
     local stmt_update_itemData = db:prepare(ZOTERO_DB_UPDATE_ITEMDATA)
 	local stmt_update_collectionItems = db:prepare(ZOTERO_DB_UPDATE_COLLECTION_ITEMS)
@@ -920,7 +925,7 @@ function API.syncAllItems(progress_callback)
 
 	
     API.batchDownload(callback)
-    API.syncAnnotations()
+--    API.syncAnnotations()
 
     return nil
 end
@@ -1305,35 +1310,23 @@ end
 
 function API.syncAnnotations(progress_callback)
     local db = API.openDB()
---    local item_count = db:exec(ZOTERO_GET_LOCAL_PDF_ITEMS_SIZE)[1][1]
-
-
-    --local stmt = db:prepare(ZOTERO_GET_LOCAL_PDF_ITEMS)
 	local stmt = db:prepare(ZOTERO_GET_LOCAL_ATTACHMENT)
-    --stmt:reset()
-    --stmt:clearbind()
-    
-
+	-- get list of all local pdf files (according to db...)
     local files, item_count = stmt:resultset()
---    print(item_count, unpack(files[1]), unpack(files[2]))
---    local i = 1
+    logger.info("Checking for new local annotations on "..item_count.." pdf files.")
+    stmt:close()
 
     for i = 1, item_count do
         local key = files[1][i]
         local filename = files[2][i]
-		print(key, filename)
         local file_path = API.storage_dir .. "/" .. key .. "/" .. filename
+        
         Annotations.createAnnotations(file_path, key, API.createItems)
---        row = stmt:step(row)
 
         if progress_callback ~= nil and (i == 1 or i % 10 == 0 or i == item_count) then
             progress_callback(string.format(_("Syncing annotations of file %i/%i"), i, item_count))
         end
-
---        i = i + 1
     end
-    --]]
-    stmt:close()
 end
 
 -- Create a whole range of items.
@@ -1535,8 +1528,13 @@ function API.syncItemAnnotations(item, annotation_callback)
                     end                   
                 end
             else
-                print("Annotation has been deleted in Zotero "..key)
-                zoteroItems[key] = { ["status"] = "deletedRemote" }      
+				if ann.zoteroVersion > libVersion then
+					print("Local Annotation "..key.." ahead of DB")
+					zoteroItems[key] = { ["status"] = "inSync" }
+				else
+					print("Annotation has been deleted in Zotero "..key)
+					zoteroItems[key] = { ["status"] = "deletedRemote", ["position"] = idx  }
+				end
             end
         end
         -- Check with the remote list of annotations to see if there are any new ones or local deletions...
