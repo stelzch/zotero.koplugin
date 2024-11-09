@@ -23,9 +23,13 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 ### Random coding details:
 
 - [] Make use of 'itemAttachments' table
-	- [] use it to track synced version
+	- [x] use it to track synced version
 	- [] use it to identify children
 	- [] Store all attachment details in there?
+		- [] file name
+		- [] file type
+		- [] link type
+		- [] 'title'
 	
 - [x] Make an 'itemAnnotation' table
 	- [] use it to track synced version
@@ -57,10 +61,13 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 	
 - [] Opening non-pdf files currently leads to a crash if there are annotations as the page size routines do not work
 
-- [] Annotation sync to Zotero is currently disabled
+- [x] Annotation sync to Zotero is currently disabled
 
-- [] Re-sync library function currently not working:
-	- 'collections' table is empty after re-sync for some reason.
+	Re-enabled. 08/11/24
+	Working, but the Christoph's and my annotation system are still separate. Needs tidying
+
+- [x] Re-sync library function currently not working:
+	- 'collections' table is empty after re-sync for some reason. [I think this was bug in my code]
 	- Workaround: delete zotero.db
 	- Plan: maybe implement this programatically: delete (or better move db to backup file) to initiate re-sync?
 	

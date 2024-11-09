@@ -215,7 +215,9 @@ function Annotations.createAnnotations(file_path, key, creation_callback)
             local k_index = index_map[k]
             assert(k_index ~= nil)
             k_annotations[k_index].zoteroKey = v.key
+            k_annotations[k_index].zoteroVersion = v.version
             k_annotations_modified = true
+            print(JSON.encode(v))
         end
     end
 
