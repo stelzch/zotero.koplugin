@@ -186,7 +186,7 @@ VALUES
 --AND EXISTS (SELECT collection_hierarchy.key FROM collection_hierarchy INTERSECT SELECT value FROM json_each(jsonb_extract(attachment_data.parent_value, '$.data.collections')))
 ---- and local version must be lower than remote version (otherwise its considered up-to-date)
 --AND coalesce((SELECT version FROM attachment_versions WHERE attachment_versions.key = attachment_data.key), 0) < jsonb_extract(attachment_data.value, '$.version');
-
+--[[
 -- select all pdf attachments present locally
 local ZOTERO_CREATE_VIEWS = [[ 
 CREATE TEMPORARY TABLE IF NOT EXISTS supported_link_types (type TEXT);
@@ -258,7 +258,7 @@ local ZOTERO_DB_UPDATE_COLLECTION_ITEMS = [[
 INSERT INTO collectionItems(collectionID, itemID) SELECT collections.collectionID, items.itemID FROM collections, items WHERE collections.key = ?1 AND items.key=?2
 ON CONFLICT DO NOTHING;
 ]]
-local ZOTERO_GET_COLLECTION_VERSION = [[ SELECT collectionID, version FROM collections WHERE key = ?; ]]
+local ZOTERO_GET_COLLECTION_VERSION = [[ SELECT version, collectionID FROM collections WHERE key = ?; ]]
 
 local ZOTERO_DB_DELETE = [[
 DELETE FROM libraries;
@@ -477,9 +477,9 @@ function API.openDB()
         return API.db
     else
         API.db = SQ3.open(API.db_path)
-		API.db:exec(ZOTERO_CREATE_VIEWS)
+		--API.db:exec(ZOTERO_CREATE_VIEWS)
 		API.db:exec("PRAGMA foreign_keys=ON")
-		logger.info("Zotero: db opened with foreign keys enabled: ", tonumber(unpack(API.db:exec("PRAGMA foreign_keys")[1])))
+		--logger.info("Zotero: db opened with foreign keys enabled: ", tonumber(unpack(API.db:exec("PRAGMA foreign_keys")[1])))
 		if API.getLibraryVersion() == 0 then
 			logger.info("Zotero: db version is 0. Set up tables.")
 			API.db:exec(ZOTERO_DB_SCHEMA)
@@ -487,7 +487,7 @@ function API.openDB()
 			API.db:rowexec(ZOTERO_DB_INIT_LIBS)
 			local cnt = API.db:rowexec(ZOTERO_DB_CHANGES)
 			if cnt ~= nil then 
-				logger.info("Changes in libraries table: ", tonumber(cnt))
+				logger.info("Zotero: Changes in libraries table: ", tonumber(cnt))
 			end
 			local cnt = API.db:rowexec("SELECT COUNT(*) FROM itemTypes")
 			if cnt == 0 then
@@ -495,11 +495,13 @@ function API.openDB()
 				API.db:exec(ZOTERO_DB_INIT_ITEMTYPES)
 				local cnt = API.db:rowexec(ZOTERO_DB_CHANGES)
 				if cnt ~= nil then 
-					logger.info("Changes in itemTypes table: ", tonumber(cnt))
+					logger.info("Zotero: Changes in itemTypes table: ", tonumber(cnt))
 				end
 			end
 			logger.info("Zotero: Set up root collection.")
 			API.db:exec(ZOTERO_DB_INIT_COLLECTIONS)
+		else
+			logger.info("Zotero: Local db version: "..API.libVersion)
 		end
         return API.db
     end
@@ -580,19 +582,20 @@ function API.setWebDAVUrl(url)
 end
 
 function API.getLibraryVersion()
-    local db = API.openDB()
-
-    local result, ncol = db:exec(ZOTERO_GET_DB_VERSION)
-    assert(ncol == 1)
-    local version = tonumber(result[1][1])
-
-    return version
+    if API.libVersion == nil then
+		local db = API.openDB()
+		local result, ncol = db:exec(ZOTERO_GET_DB_VERSION)
+		assert(ncol == 1)
+		local version = tonumber(result[1][1])
+		API.libVersion = version
+	end
+    return API.libVersion
 end
 
 function API.setLibraryVersion(version)
-    local v = tonumber(version)
+    API.libVersion = tonumber(version)
     local db = API.openDB()
-    local sql = "PRAGMA user_version = " .. tostring(v) .. ";"
+    local sql = "PRAGMA user_version = " .. tostring(API.libVersion) .. ";"
     db:exec(sql)
 end
 
@@ -762,7 +765,7 @@ function API.syncAllItems(progress_callback)
 
     local db = API.openDB()
     local since = API.getLibraryVersion()
-	logger.info("Local Zotero lib version: "..since)
+	--logger.info("Local Zotero lib version: "..since)
 	
     local e, api_key, user_id = API.ensureKeyAndID()
     if e ~= nil then return e end
@@ -785,6 +788,7 @@ function API.syncAllItems(progress_callback)
     local items_url = ("https://api.zotero.org/users/%s/items?since=%s&includeTrashed=true"):format(user_id, since)
     local collections_url = ("https://api.zotero.org/users/%s/collections?since=%s&includeTrashed=true"):format(user_id, since)
 
+	-- next is used to check whether table has entries. Apparently defining it as a local var makes this more efficient.
 	local next = next	
     
     -- Sync library collections
@@ -799,8 +803,8 @@ function API.syncAllItems(progress_callback)
             -- Ruthlessly update our local items
             local collection = partial_entries[i].data
             local key = collection.key
+			--logger.info(JSON.encode(collection))
             -- for collections Zotero seems to use collection.deleted = true
-			logger.info(JSON.encode(collection))
 			if collection.deleted then
 				logger.info("Collection "..key.." has been deleted.")
 				local localVersion = stmt_get_collectionVersion:reset():bind(key):step()
@@ -1012,7 +1016,8 @@ function API.downloadAndGetPath(key, download_callback)
 	print(itemID, itemVersion, local_version, "item.version: "..item.version)
     if local_version ~= nil and local_version >= item.version and file_exists(targetPath) then
 		logger.info("Up-to-date local file. No need for download.")
-		API.syncItemAnnotations(item)
+		--API.syncItemAnnotations(item)
+		API.attachItemAnnotations(item)
         return targetPath, nil -- all done, local file is up to date
     end
 
@@ -1039,7 +1044,8 @@ function API.downloadAndGetPath(key, download_callback)
 
     API.setAttachmentVersion(itemID, item.version)
 
-	API.syncItemAnnotations(item)
+	--API.syncItemAnnotations(item)
+	API.attachItemAnnotations(item)
 
     return targetPath, nil
 end
@@ -1093,9 +1099,6 @@ end
 -- Download all files that are part of an offline collection
 function API.batchDownload(progress_callback)
     local db = API.openDB()
-
-    --local item_count = db:exec(ZOTERO_GET_DOWNLOAD_QUEUE_SIZE)[1][1]
-
     local stmt = db:prepare(ZOTERO_GET_OFFLINE_COLLECTION_ATTACHMENTS)
 
 	local result, item_count = stmt:reset():resultset()
@@ -1111,23 +1114,6 @@ function API.batchDownload(progress_callback)
 			progress_callback(string.format(_("Error downloading attachment %s: %s"), filename, e))
 		end
 	end
-
-
-    --local row, nr = stmt:step({}, {})
-    --local i = 1
-    --while row ~= nil do
-        --local download_key = row[1]
-        --local filename = row[2]
-        --progress_callback(string.format(_("Downloading attachment %i/%i"), i, item_count))
-        --local path, e = API.downloadAndGetPath(download_key, nil)
-
-        --if e ~= nil then
-            --progress_callback(string.format(_("Error downloading attachment %s: %s"), filename, e))
-        --end
-
-        --row = stmt:step(row)
-        --i = i + 1
-    --end
 end
 
 -- Convert a Zotero annotation item to a KOReader annotation
@@ -1443,10 +1429,10 @@ function API.syncItemAnnotations(item, annotation_callback)
     local zotCount = 0
     
     local settings = LuaSettings:open(BaseUtil.joinPath(fileDir, ".zotero.metadata.lua"))    
-    local localLibVersion = settings:readSetting("libraryVersion", 0)
+    local lastSyncedLibVersion = settings:readSetting("libraryVersion", 0)
     local libVersion = tonumber(API.getLibraryVersion())
-    print("Local lib version: ", localLibVersion)
-    if localLibVersion >= libVersion then 
+    print("Local lib version: ", lastSyncedLibVersion)
+    if lastSyncedLibVersion >= libVersion then 
         print("No need to check Zotero database") 
         zoteroItems = settings:readSetting("zoteroItems")
         updateNeeded = false
@@ -1540,7 +1526,7 @@ function API.syncItemAnnotations(item, annotation_callback)
         -- Check with the remote list of annotations to see if there are any new ones or local deletions...
         for key, annInfo in pairs(zoteroItems) do
             if localZotAnn[key] == nil then
-                if API.getItem(key).version > localLibVersion then
+                if API.getItem(key).version > lastSyncedLibVersion then
                     print("New Zotero annotation: "..key)
                     zoteroItems[key].status = "newRemote"
                 else
@@ -1618,6 +1604,112 @@ function API.syncItemAnnotations(item, annotation_callback)
     settings:saveSetting("zoteroItems", zoteroItems)
     settings:saveSetting("libraryVersion", tonumber(API.getLibraryVersion()))
     settings:flush() 
+    docSettings:flush()
+end
+
+-- Sync annotations for specified item from Zotero with sdr folder
+function API.attachItemAnnotations(item, annotation_callback)
+
+	if item.data.contentType ~= SUPPORTED_MEDIA_TYPES[1] then
+        return "Warning: Can only sync annotations for pdf files for now"
+    end
+	
+	local itemKey = item.key
+    local fileDir, filePath = API.getDirAndPath(item)
+
+    if filePath == nil then
+        return "Error: could not find item"
+    end
+    
+    -- (Relevant) Zotero annotation keys (currently only for highlights)
+    local zoteroItems = {}
+    local zotCount = 0
+    
+	local docSettings = DocSettings:open(filePath)    
+    local lastSyncedLibVersion = docSettings:readSetting("zoteroLibVersion", 0)
+    local libVersion = tonumber(API.getLibraryVersion())
+
+    if lastSyncedLibVersion < libVersion then 
+        --print("Checking item\'s annotations in Zotero database")
+        -- Scan zotero annotations.
+		local db = API.openDB()
+		local stmt_get_ItemAnnotationInfo = db:prepare(ZOTERO_GET_ITEM_ANNOTATIONS_INFO)
+
+		local row = stmt_get_ItemAnnotationInfo:bind(itemKey):step()
+		while row ~= nil do
+			local key = row[1]
+			zoteroItems[key] = {["version"] = tonumber(row[2]), ["syncedVersion"] = tonumber(row[3])}
+			zotCount = zotCount + 1
+			row = stmt_get_ItemAnnotationInfo:step(row)
+		end
+        print(JSON.encode(zoteroItems))
+    end
+    if zotCount == 0 then
+		logger.info("Zotero: item annotations up to date.")
+		docSettings:close()
+		return
+    end
+    
+	-- Find all the annotations that KOReader knows about from DocSettings
+    local koreaderAnnotations = docSettings:readSetting("annotations", {})
+    print(#koreaderAnnotations.." KOReader Annotations. ")
+
+    local localZotAnn = {}
+    local localKORAnn = {}
+    local localMods = 0
+    -- If there are locally stored KOReader annotations, check them to identify Zotero annotations
+	for idx, ann in ipairs(koreaderAnnotations) do
+		if (ann.zoteroKey ~= nil) then
+			localZotAnn[ann.zoteroKey] = { ["position"] = idx, ["version"] = ann.zoteroVersion }
+		--else
+			--if ann.drawer ~= nil then -- it's a note or highlight
+				--logger.dbg("Zotero: Additional KOReader annotation: "..ann.text)
+				---- make 'fake' sort key
+				--koreaderAnnotations[idx].zoteroSortIndex = string.format("%05d|%05d|%05d", ann.page-1, idx, math.floor(ann.pos0.x))
+				----print(koreaderAnnotations[idx].zoteroSortIndex)
+				--table.insert(localKORAnn, idx)
+				--localMods = localMods + 1
+			--else -- it's a bookmark (or even s/t else?)
+				--logger.dbg("Zotero: Ignoring bookmark: "..ann.text)
+			--end
+		end
+	end
+    
+	-- We need to get page height of pdf document to be able to convert Zotero position to KOReader positions
+	local pageDims -- = settings:readSetting("pageDimensions")
+	if pageDims == nil then
+		pageDims = getPageDimensions(filePath)
+	end
+	
+	for key, itemInfo in pairs(zoteroItems) do
+		local item = API.getItem(key)
+		print(key, JSON.encode(localZotAnn[key]))
+		if localZotAnn[key] == nil then
+			table.insert(koreaderAnnotations, zotero2KoreaderAnnotation(item, pageDims.h))
+		elseif localZotAnn[key].version < itemInfo.version then
+			print("Updating annotation "..key)
+			koreaderAnnotations[localZotAnn[key].position] = zotero2KoreaderAnnotation(item, pageDims.h)
+		end
+	end
+
+	-- Unsorted annotations seem to lead to spurious results when displaying notes!
+	-- So seems important to have them in the right order before saving them
+	
+	-- Use zoteroSortIndex for sorting.
+	-- No idea how this index is generated, but this seems to work...
+	local comparator = function(a,b)
+		return (a["zoteroSortIndex"] < b["zoteroSortIndex"])
+	end
+	table.sort(koreaderAnnotations, comparator)
+
+	-- Write to sdr file
+	docSettings:saveSetting("annotations", koreaderAnnotations)
+	docSettings:saveSetting("zoteroLibVersion", API.getLibraryVersion())
+	-- Save page dimensions for future use
+	--settings:saveSetting("pageDimensions", pageDims)    
+    --settings:saveSetting("zoteroItems", zoteroItems)
+    --settings:saveSetting("libraryVersion", tonumber(API.getLibraryVersion()))
+    --settings:flush() 
     docSettings:flush()
 end
 
