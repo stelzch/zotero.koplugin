@@ -36,7 +36,13 @@ local K2Z_STYLE = {
     ["invert"] = "highlight",
 }
 
-local defaultColor = K2Z_COLORS["gray"]
+local defaultKColor = "yellow"
+local defaultZColor = K2Z_COLORS["gray"]
+
+local function limitDigits(x, num_places)
+    local fac = 10^num_places
+    return math.floor(x * fac) / fac
+end
 
 function Annotations.getPageDimensions(file, pages)
     if pages == nil then
@@ -117,7 +123,7 @@ end
 
 function Annotations.convertKOReaderToZotero(annotation, page_height, parent_key)
     local date = Annotations.utcFromLocal(annotation.datetime)
-    local color = defaultColor
+    local color = defaultZColor
     if annotation.color ~= nil then color = Annotations.colorKOReaderToZotero(annotation.color) end
     local type = Annotations.annotationTypeKOReaderToZotero(annotation.drawer)
     local rects = {}
@@ -126,36 +132,95 @@ function Annotations.convertKOReaderToZotero(annotation, page_height, parent_key
     -- y-axis extends towards the bottom whereas on Zotero the y-axis extends
     -- towards the bottom.
     -- Therefore, we need to transform coordinates before uploading them to Zotero
+    local digits = 2
     for _, pbox in ipairs(annotation.pboxes) do
         local x1 = pbox.x
         local y1 = page_height - pbox.y - pbox.h
         local x2 = pbox.x + pbox.w
         local y2 = y1 + pbox.h
 
-        table.insert(rects, {x1, y1, x2, y2})
+        table.insert(rects, {limitDigits(x1,digits), limitDigits(y1,digits), limitDigits(x2,digits), limitDigits(y2,digits)})
     end
 
-
-    return {
+	-- make 'fake' sort key
+	local zoteroSortIndex = string.format("%05d|%05d|%05d", annotation.pageno-1, 0, math.floor(annotation.pos0.x))
+    -- gets rejected!! Leave it for now
+    
+    local ZAnnotation = {
         ["itemType"] = "annotation",
         ["parentItem"] = parent_key,
         ["annotationType"] = type,
-        ["annotationComment"] = annotation.note or "",
-        ["annotationText"] = annotation.text or "",
         ["annotationColor"] = color,
         ["annotationPageLabel"] = tostring(annotation.page),
-        ["annotationSortIndex"] = "00000|000000|00000",
+--        ["annotationSortIndex"] = zoteroSortIndex,
         ["annotationPosition"] = JSON.encode({
             ["pageIndex"] = annotation.pageno - 1,
             ["rects"] = rects,
         }),
---        ["tags"] = {},
-        ["dateAdded"] = date,
         ["dateModified"] = date
-    }
-
+    }                
+	
+	if annotation.note then ZAnnotation["annotationComment"] = annotation.note end
+	if annotation.text then ZAnnotation["annotationText"] = annotation.text end
+	
+    return ZAnnotation
 end
 
+-- Convert a Zotero annotation item to a KOReader annotation
+-- NOTE: currently only works with text highlights and annotations.
+function Annotations.convertZoteroToKOReader(annotation, page_height)
+    local pos = JSON.decode(annotation.data.annotationPosition)
+    local page = pos.pageIndex + 1
+    
+    local rects = {}
+    for k, bbox in ipairs(pos.rects) do
+        table.insert(rects, {
+            ["x"] = bbox[1],
+            ["y"] = page_height - bbox[4],
+            ["w"] = bbox[3] - bbox[1],
+            ["h"] = bbox[4] - bbox[2],
+        })
+    end
+    assert(#rects > 0)
+
+    local shift = 1
+    -- KOReader seems to find 'single word' text boxes which contain pos0 and pos1 to work out the boundaries of the highlight.
+    -- If the positions are not inside any box it looks for the box which has its centre closest to the position. To avoid unexpected
+    -- behaviour shift the positions slightly inside the first/last word box. Assumes top left to bottom right word arrangement...
+    local pos0 = {
+        ["page"] = page,
+        ["rotation"] = 0,
+        ["x"] = rects[1].x + shift,
+        ["y"] = rects[1].y + shift,
+    }
+    -- Take last bounding box
+    local pos1 = {
+        ["page"] = page,
+        ["rotation"] = 0,
+        ["x"] = rects[#rects].x + rects[#rects].w - shift,
+        ["y"] = rects[#rects].y + rects[#rects].h - shift,
+    }
+    -- Convert Zotero time stamp to the format used by KOReader
+    -- e.g. "2024-09-24T18:13:49Z" to "2024-09-24 18:13:49"
+    local koAnnotation = {
+			["color"] = Z2K_COLORS[annotation.annotationColor] or defaultKColor,
+            ["datetime"] = string.sub(string.gsub(annotation.data.dateModified, "T", " "), 1, -2), -- convert format
+            ["drawer"] = "lighten",
+            ["page"] = page,
+            ["pboxes"] = rects,
+            ["pos0"] = pos0,
+            ["pos1"] = pos1,
+            ["text"] = annotation.data.annotationText,
+            ["zoteroKey"] = annotation.key,
+            ["zoteroSortIndex"] = annotation.data.annotationSortIndex,
+            ["zoteroVersion"] = annotation.version,
+        }
+    -- KOReader seems to use the presence of the "note" field to distinguish between "highlight" and "note"
+    -- Important for how they get displayed in the bookmarks!
+    if (annotation.data.annotationComment ~= "") then koAnnotation["note"] = annotation.data.annotationComment end
+
+    return koAnnotation
+end
 
 -- Create annotations for a single document using creation_callback.
 function Annotations.createAnnotations(file_path, key, creation_callback)
@@ -199,7 +264,7 @@ function Annotations.createAnnotations(file_path, key, creation_callback)
             index_map[#z_annotations] = i -- keep track of index
         end
     end
-
+	--print(JSON.encode(z_annotations))
     if #z_annotations == 0 then
         return nil, nil
     end
@@ -217,7 +282,7 @@ function Annotations.createAnnotations(file_path, key, creation_callback)
             k_annotations[k_index].zoteroKey = v.key
             k_annotations[k_index].zoteroVersion = v.version
             k_annotations_modified = true
-            print(JSON.encode(v))
+            logger.info("New Zotero annotation created: ", JSON.encode(v))
         end
     end
 
