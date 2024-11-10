@@ -96,10 +96,6 @@ CREATE TABLE IF NOT EXISTS itemAnnotations (
 	FOREIGN KEY (itemID) REFERENCES items(itemID) ON DELETE CASCADE,
 	FOREIGN KEY (parentItemID) REFERENCES items(itemID) ON DELETE CASCADE
 );
-CREATE TABLE IF NOT EXISTS attachment_versions(
-    key TEXT PRIMARY KEY,
-    version INTEGER
-);
 ]]
 
 local ZOTERO_DB_INIT_ITEMTYPES = [[
@@ -295,21 +291,26 @@ local ZOTERO_QUERY_ITEMS = [[
 WITH cid AS (SELECT collectionID AS ID FROM collections WHERE key = ?1) 
 SELECT 
 	key, 
-	collectionName || '/', 
+	colname, 
 	'collection' 
-FROM collections, cid 
-WHERE parentCollectionID = cid.ID
+FROM (
+	SELECT 
+		key, 
+		collectionName || '/' AS colname
+	FROM collections, cid 
+	WHERE parentCollectionID = cid.ID
+	ORDER By colname)
 UNION ALL
 SELECT 
 	key, 
-	name || title AS name, 
+	name, 
 	type 
 FROM (
 	SELECT
 	   items.key,
-		jsonb_extract(value, '$.data.title') AS title,
+--		jsonb_extract(value, '$.data.title') AS title,
 		---- if possible, prepend creator summary
-		coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') AS name,
+		coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') || jsonb_extract(value, '$.data.title') AS name,
 		iif(items.itemTypeID = 3, 'attachment', 'item') AS type
 	FROM 
 		itemData INNER JOIN items ON itemData.itemID = items.itemID, cid
@@ -317,8 +318,8 @@ FROM (
 		itemData.itemID IN (
 			SELECT itemID FROM collectionItems,cid WHERE collectionID = cid.ID
 		)
+	ORDER BY name
 );
---ORDER BY title);
 ]]
 
 local ZOTERO_GET_COLLECTION_ITEMS = [[
@@ -465,11 +466,6 @@ local function file_slurp(path)
     local content = f:read("*all")
     f:close()
     return content
-end
-
-function API.cutDecimalPlaces(x, num_places)
-    local fac = 10^num_places
-    return math.floor(x * fac) / fac
 end
 
 function API.openDB()
@@ -1008,7 +1004,7 @@ function API.downloadAndGetPath(key, download_callback)
     lfs.mkdir(targetDir)
 
     local local_version, itemVersion, itemID = API.getAttachmentVersion(key)
-	print(itemID, itemVersion, local_version, "item.version: "..item.version)
+	logger.info("ItemID: "..itemID..", local items: "..local_version.." item version: "..itemVersion)
     if local_version ~= nil and local_version >= item.version and file_exists(targetPath) then
 		logger.info("Up-to-date local file. No need for download.")
 		--API.syncItemAnnotations(item)
@@ -1111,61 +1107,6 @@ function API.batchDownload(progress_callback)
 	end
 end
 
--- Convert a Zotero annotation item to a KOReader annotation
--- NOTE: currently only works with text highlights and annotations.
-local function zotero2KoreaderAnnotation(annotation, pageHeightinPoints)
-    local pos = JSON.decode(annotation.data.annotationPosition)
-    local page = pos.pageIndex + 1
-    
-    local rects = {}
-    for k, bbox in ipairs(pos.rects) do
-        table.insert(rects, {
-            ["x"] = bbox[1],
-            ["y"] = pageHeightinPoints - bbox[4],
-            ["w"] = bbox[3] - bbox[1],
-            ["h"] = bbox[4] - bbox[2],
-        })
-    end
-    assert(#rects > 0)
-
-    local shift = 1
-    -- KOReader seems to find 'single word' text boxes which contain pos0 and pos1 to work out the boundaries of the highlight.
-    -- If the positions are not inside any box it looks for the box which has its centre closest to the position. To avoid unexpected
-    -- behaviour shift the positions slightly inside the first/last word box. Assumes top left to bottom right word arrangement...
-    local pos0 = {
-        ["page"] = page,
-        ["rotation"] = 0,
-        ["x"] = rects[1].x + shift,
-        ["y"] = rects[1].y + shift,
-    }
-    -- Take last bounding box
-    local pos1 = {
-        ["page"] = page,
-        ["rotation"] = 0,
-        ["x"] = rects[#rects].x + rects[#rects].w - shift,
-        ["y"] = rects[#rects].y + rects[#rects].h - shift,
-    }
-    -- Convert Zotero time stamp to the format used by KOReader
-    -- e.g. "2024-09-24T18:13:49Z" to "2024-09-24 18:13:49"
-    local koAnnotation = {
-            ["datetime"] = string.sub(string.gsub(annotation.data.dateModified, "T", " "), 1, -2), -- convert format
-            ["drawer"] = "lighten",
-            ["page"] = page,
-            ["pboxes"] = rects,
-            ["pos0"] = pos0,
-            ["pos1"] = pos1,
-            ["text"] = annotation.data.annotationText,
-            ["zoteroKey"] = annotation.key,
-            ["zoteroSortIndex"] = annotation.data.annotationSortIndex,
-            ["zoteroVersion"] = annotation.version,
-        }
-    -- KOReader seems to use the presence of the "note" field to distinguish between "highlight" and "note"
-    -- Important for how they get displayed in the bookmarks!
-    if (annotation.data.annotationComment ~= "") then koAnnotation["note"] = annotation.data.annotationComment end
-
-    return koAnnotation
-end
-
 -- Return a table of entries of a collection.
 --
 -- If key is nil, entries of the root collection will be given.
@@ -1224,7 +1165,7 @@ function API.displaySearchResults(query)
         row = stmt:step(row)
     end
     stmt:close()
-	print(JSON.encode(result))
+	--print(JSON.encode(result))
     return result
 end
 
@@ -1358,8 +1299,9 @@ function API.createItems(items)
         if not ok then
             return created_items, "Error: failed to parse JSON in response to annotation creation request"
         end
-
+        
         local new_library_version = response_headers["last-modified-version"]
+--        print("New lib version: ", new_library_version)
         if new_library_version ~= nil then
             API.setLibraryVersion(new_library_version)
         else
@@ -1563,17 +1505,17 @@ function API.syncItemAnnotations(item, annotation_callback)
         
         if #koreaderAnnotations == 0 then
             for key, annInfo in pairs(zoteroItems) do
-                table.insert(koreaderAnnotations, zotero2KoreaderAnnotation(API.getItem(key), pageDims.h))
+                table.insert(koreaderAnnotations, Annotations.convertZoteroToKOReader(API.getItem(key), pageDims.h))
             end
         else
             for key, itemInfo in pairs(zoteroItems) do
             print("Updating item ", key, itemInfo.status)
                 if itemInfo.status == "newerRemote" then
-                    koreaderAnnotations[itemInfo.position] = zotero2KoreaderAnnotation(API.getItem(key), pageDims.h)
+                    koreaderAnnotations[itemInfo.position] = Annotations.convertZoteroToKOReader(API.getItem(key), pageDims.h)
                 elseif itemInfo.status == "deletedRemote" then
                     koreaderAnnotations[itemInfo.position] = nil
                 elseif itemInfo.status == "newRemote" then
-                    table.insert(koreaderAnnotations, zotero2KoreaderAnnotation(API.getItem(key), pageDims.h))
+                    table.insert(koreaderAnnotations, Annotations.convertZoteroToKOReader(API.getItem(key), pageDims.h))
                 end
             end
         end
@@ -1602,7 +1544,8 @@ function API.syncItemAnnotations(item, annotation_callback)
     docSettings:flush()
 end
 
--- Sync annotations for specified item from Zotero with sdr folder
+-- Attach Zotero annotations for specified item
+-- by adding them to document settings
 function API.attachItemAnnotations(item, annotation_callback)
 
 	if item.data.contentType ~= SUPPORTED_MEDIA_TYPES[1] then
@@ -1637,7 +1580,7 @@ function API.attachItemAnnotations(item, annotation_callback)
 			zotCount = zotCount + 1
 			row = stmt_get_ItemAnnotationInfo:step(row)
 		end
-        print(JSON.encode(zoteroItems))
+        --print(JSON.encode(zoteroItems))
     end
     if zotCount == 0 then
 		logger.info("Zotero: item annotations up to date.")
@@ -1650,45 +1593,32 @@ function API.attachItemAnnotations(item, annotation_callback)
     print(#koreaderAnnotations.." KOReader Annotations. ")
 
     local localZotAnn = {}
-    local localKORAnn = {}
-    local localMods = 0
     -- If there are locally stored KOReader annotations, check them to identify Zotero annotations
 	for idx, ann in ipairs(koreaderAnnotations) do
 		if (ann.zoteroKey ~= nil) then
 			if zoteroItems[ann.zoteroKey] ~= nil then
 				localZotAnn[ann.zoteroKey] = { ["position"] = idx, ["version"] = ann.zoteroVersion }
 			elseif ann.zoteroVersion < libVersion then
-				print("Delete Zotero annotation "..ann.zoteroKey)
+				logger.info("Delete Zotero annotation "..ann.zoteroKey)
 				koreaderAnnotations[idx] = nil			
 			end
-		--else
-			--if ann.drawer ~= nil then -- it's a note or highlight
-				--logger.dbg("Zotero: Additional KOReader annotation: "..ann.text)
-				---- make 'fake' sort key
-				--koreaderAnnotations[idx].zoteroSortIndex = string.format("%05d|%05d|%05d", ann.page-1, idx, math.floor(ann.pos0.x))
-				----print(koreaderAnnotations[idx].zoteroSortIndex)
-				--table.insert(localKORAnn, idx)
-				--localMods = localMods + 1
-			--else -- it's a bookmark (or even s/t else?)
-				--logger.dbg("Zotero: Ignoring bookmark: "..ann.text)
-			--end
 		end
 	end
     
 	-- We need to get page height of pdf document to be able to convert Zotero position to KOReader positions
-	local pageDims -- = settings:readSetting("pageDimensions")
-	if pageDims == nil then
-		pageDims = getPageDimensions(filePath)
+	local pageHeight = docSettings:readSetting("page_height")
+	if pageHeight == nil then
+		pageHeight = getPageDimensions(filePath).h
 	end
 	
 	for key, itemInfo in pairs(zoteroItems) do
 		local item = API.getItem(key)
 		print(key, JSON.encode(localZotAnn[key]))
 		if localZotAnn[key] == nil then
-			table.insert(koreaderAnnotations, zotero2KoreaderAnnotation(item, pageDims.h))
+			table.insert(koreaderAnnotations, Annotations.convertZoteroToKOReader(item, pageHeight))
 		elseif localZotAnn[key].version < itemInfo.version then
-			print("Updating annotation "..key)
-			koreaderAnnotations[localZotAnn[key].position] = zotero2KoreaderAnnotation(item, pageDims.h)
+			logger.info("Updating annotation "..key)
+			koreaderAnnotations[localZotAnn[key].position] = Annotations.convertZoteroToKOReader(item, pageHeight)
 		end
 	end
 
@@ -1706,10 +1636,7 @@ function API.attachItemAnnotations(item, annotation_callback)
 	docSettings:saveSetting("annotations", koreaderAnnotations)
 	docSettings:saveSetting("zoteroLibVersion", API.getLibraryVersion())
 	-- Save page dimensions for future use
-	--settings:saveSetting("pageDimensions", pageDims)    
-    --settings:saveSetting("zoteroItems", zoteroItems)
-    --settings:saveSetting("libraryVersion", tonumber(API.getLibraryVersion()))
-    --settings:flush() 
+	docSettings:saveSetting("page_height", pageHeight)
     docSettings:flush()
 end
 
