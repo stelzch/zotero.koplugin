@@ -514,6 +514,7 @@ function API.closeDB()
         API.db:close()
     end
     API.db = nil
+    API.libVersion = nil
 end
 
 function API.init(zotero_dir)
@@ -860,22 +861,16 @@ function API.syncAllItems(progress_callback)
             -- Ruthlessly update our local items
             local item = partial_entries[i]
             local key = item.key
-            local res = stmt_get_ItemVersion:reset():bind(key):step()
-            if res ~= nil then 
-            -- we have a local version already; should do something different?
-				logger.info("Zotero: update for local item "..key..": itemID ", tonumber(res[1]), ", version ", tonumber(res[2]) ) 
-			else
-				logger.info("New item: "..key)
-			end
             
-            if item.data.deleted == 1 then
-				print("Item "..key.." has been deleted.")
-				if res ~= nil then
+            if item.data.deleted then
+				logger.info("Item "..key.." has been deleted.")
+				local res = stmt_get_ItemVersion:reset():bind(key):step()
+				if res ~= nil then 
 					stmt_delete_item:reset():bind(key):step()
-					local cnt = stmt_changes:reset():step()
-					if cnt ~= nil then 
-						logger.info("Changes: ", tonumber(cnt[1]))
-					end
+					--local cnt = stmt_changes:reset():step()
+					--if cnt ~= nil then 
+						--logger.info("Changes: ", tonumber(cnt[1]))
+					--end
 				end
 			else
 				-- remove some unused data
@@ -883,10 +878,10 @@ function API.syncAllItems(progress_callback)
 				item.library = nil
 
 				stmt_update_item:reset():bind(1, item.data.itemType, key, item.version):step()
-				local cnt = stmt_changes:reset():step()
-				if cnt ~= nil then 
-					print("Changes: ", tonumber(cnt[1]))
-				end
+				--local cnt = stmt_changes:reset():step()
+				--if cnt ~= nil then 
+					--print("Changes: ", tonumber(cnt[1]))
+				--end
 				stmt_update_itemData:reset():bind(key, JSON.encode(item)):step()
 				if item.data.collections ~= nil then
 					local itemCol = item.data.collections[1]
@@ -1660,7 +1655,12 @@ function API.attachItemAnnotations(item, annotation_callback)
     -- If there are locally stored KOReader annotations, check them to identify Zotero annotations
 	for idx, ann in ipairs(koreaderAnnotations) do
 		if (ann.zoteroKey ~= nil) then
-			localZotAnn[ann.zoteroKey] = { ["position"] = idx, ["version"] = ann.zoteroVersion }
+			if zoteroItems[ann.zoteroKey] ~= nil then
+				localZotAnn[ann.zoteroKey] = { ["position"] = idx, ["version"] = ann.zoteroVersion }
+			elseif ann.zoteroVersion < libVersion then
+				print("Delete Zotero annotation "..ann.zoteroKey)
+				koreaderAnnotations[idx] = nil			
+			end
 		--else
 			--if ann.drawer ~= nil then -- it's a note or highlight
 				--logger.dbg("Zotero: Additional KOReader annotation: "..ann.text)
@@ -1698,7 +1698,7 @@ function API.attachItemAnnotations(item, annotation_callback)
 	-- Use zoteroSortIndex for sorting.
 	-- No idea how this index is generated, but this seems to work...
 	local comparator = function(a,b)
-		return (a["zoteroSortIndex"] < b["zoteroSortIndex"])
+		return (a.page..(a.zoteroSortIndex or "") < b.page..(b.zoteroSortIndex or ""))
 	end
 	table.sort(koreaderAnnotations, comparator)
 
