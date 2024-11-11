@@ -10,7 +10,7 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 
 	Mostly implemented (except deletion of collections) on 27/10/24
 
-- [] Display Zotero annotations on Koreader
+- [x] Display Zotero annotations on Koreader
 
 	Rough implementation working 27/10/24
 
@@ -41,6 +41,10 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 	- [] set user and ID
 	- [] use it to store version
 
+- [] Detect downloaded files by checking file system? E.g. after database reset everything gets downloaded agin even if there is a local copy...
+
+- [] Option to do a batabase re-check (to avoid complete re-sync)
+
 
 # Known issues:
 
@@ -55,16 +59,18 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 - [x] Offline collection functionality is currently disabled
 	- Plan: use 'sync' column in collections table
 	[x] use synced column in collections table
-	[x] change routines that select offline collections to update sync column
+	[x] change routines that select offline collections to update 'synced' column
 	
 	Re-enabled 04/11/24
 	
-- [] Opening non-pdf files currently leads to a crash if there are annotations as the page size routines do not work
+- [x] Opening non-pdf files currently leads to a crash if there are annotations as the page size routines do not work
+
+	Fixed
 
 - [x] Annotation sync to Zotero is currently disabled
 
 	Re-enabled. 08/11/24
-	Working, but the Christoph's and my annotation system are still separate. Needs tidying
+	Working, but Christoph's and my annotation system are still separate. Needs tidying
 
 - [x] Re-sync library function currently not working:
 	- 'collections' table is empty after re-sync for some reason. [I think this was bug in my code]
@@ -75,4 +81,8 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 	- Workaround: long click should present a list of all attachments
 	- Plan: define an order/default attachment? What does desktop client do?
 	
-- [] Collection deletion not implemented yet; currently requires complete re-sync
+- [x] Collection deletion not implemented yet; currently requires complete re-sync
+
+	- [] Basic implementation working: but for nested collections there are still issues
+
+- [] Deleting annotations on Zotero does not seem to propagate to KOReader plugin if it already had been synced before deletion
