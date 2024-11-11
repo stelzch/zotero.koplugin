@@ -640,6 +640,29 @@ function API.getModifiedItems()
     return API.modified_items
 end
 
+-- https get call which decodes JSON data 
+function API.getZoteroData(page_url, headers)
+
+	local page_data = {}
+	local r, c, h = https.request {
+		method = "GET",
+		url = page_url,
+		headers = headers,
+		sink = ltn12.sink.table(page_data)
+	}
+	local e = API.verifyResponse(r, c)
+	if e ~= nil then 
+		return nil, e 
+	end
+	-- convert table page_data into a string:
+	local content = table.concat(page_data, "")
+	local ok, result = pcall(JSON.decode, content)
+	if ok then
+		return result, h
+	else	
+		return nil, "Error: failed to parse JSON in response"		
+	end    
+end
 
 -- This just syncs them to disk, it will not modify the Zotero collection!
 function API.saveModifiedItems()
@@ -689,7 +712,7 @@ function API.fetchCollectionPaginated(collection_url, headers, callback)
     local collection_size, e = API.fetchCollectionSize(collection_url, headers)
     if e ~= nil then return nil, e end
 
-    logger.dbg(("Zotero: Fetching %s items."):format(collection_size))
+    logger.info(("Zotero: Fetching %s items."):format(collection_size))
     -- The API returns the results in pages with 100 entries each, loop accordingly.
     local items = {}
     local library_version = 0
@@ -697,25 +720,10 @@ function API.fetchCollectionPaginated(collection_url, headers, callback)
     for item_nr = 0, collection_size, step_size do
         local page_url = ("%s&limit=%i&start=%i"):format(collection_url, step_size, item_nr)
 
-        local page_data = {}
-        local r, c, h = https.request {
-            method = "GET",
-            url = page_url,
-            headers = headers,
-            sink = ltn12.sink.table(page_data)
-        }
-
-        library_version = h["last-modified-version"]
-
-        local e = API.verifyResponse(r, c)
-if e ~= nil then return nil, e end
-
-        local content = table.concat(page_data, "")
-        local ok, result = pcall(JSON.decode, content)
-        if not ok then
-            return nil, "Error: failed to parse JSON in response"
-        end
-
+		local result, header = API.getZoteroData(page_url, headers)
+		if result == nil then return nil, header end
+		library_version = header["last-modified-version"]
+		
         local percentage = 100 * item_nr / collection_size
         if collection_size == 0 then
             percentage = 100
@@ -1600,7 +1608,7 @@ function API.attachItemAnnotations(item, annotation_callback)
 				localZotAnn[ann.zoteroKey] = { ["position"] = idx, ["version"] = ann.zoteroVersion }
 			elseif ann.zoteroVersion < libVersion then
 				logger.info("Delete Zotero annotation "..ann.zoteroKey)
-				koreaderAnnotations[idx] = nil			
+--				koreaderAnnotations[idx] = nil			
 			end
 		end
 	end
@@ -1621,7 +1629,7 @@ function API.attachItemAnnotations(item, annotation_callback)
 			koreaderAnnotations[localZotAnn[key].position] = Annotations.convertZoteroToKOReader(item, pageHeight)
 		end
 	end
-
+	--print(JSON.encode(koreaderAnnotations))
 	-- Unsorted annotations seem to lead to spurious results when displaying notes!
 	-- So seems important to have them in the right order before saving them
 	

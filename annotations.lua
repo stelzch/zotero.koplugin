@@ -36,6 +36,11 @@ local K2Z_STYLE = {
     ["invert"] = "highlight",
 }
 
+local Z2K_STYLE = {
+    ["underline"] = "underscore",
+    ["highlight"] = "lighten",
+}
+
 local defaultKColor = "yellow"
 local defaultZColor = K2Z_COLORS["gray"]
 
@@ -205,7 +210,7 @@ function Annotations.convertZoteroToKOReader(annotation, page_height)
     local koAnnotation = {
 			["color"] = Z2K_COLORS[annotation.annotationColor] or defaultKColor,
             ["datetime"] = string.sub(string.gsub(annotation.data.dateModified, "T", " "), 1, -2), -- convert format
-            ["drawer"] = "lighten",
+            ["drawer"] = Z2K_STYLE[annotation.data.annotationType] or "lighten",
             ["page"] = page,
             ["pboxes"] = rects,
             ["pos0"] = pos0,
