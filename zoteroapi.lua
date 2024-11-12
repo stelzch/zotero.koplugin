@@ -664,6 +664,32 @@ function API.getZoteroData(page_url, headers)
 	end    
 end
 
+function API.checkZoteroKey(page_url, headers)
+
+	if API.access == nil then
+		local result, header = API.getZoteroData(page_url, headers)
+		if result ~= nil then 
+			logger.info(JSON.encode(result.access))
+			logger.info(header)
+			local db = API.openDB()
+			local sql = "SELECT userID FROM libraries WHERE libraryID=1;"
+			local uID = db:rowexec(sql)
+			if uID == 0 then
+				-- userID has not been set yet. Should only happed for first ever sync...
+				sql = ('UPDATE libraries SET userID=%i, name="%s", editable=%i WHERE libraryID=1;'):format(result.userID, result.username, 0)
+				db:rowexec(sql)
+			else
+			-- should check that it is still the same user library and that we have sufficient access...
+			end
+			API.access = result.access
+		end
+	end
+	return API.access
+end
+
+
+
+
 -- This just syncs them to disk, it will not modify the Zotero collection!
 function API.saveModifiedItems()
     API.settings:flush()
@@ -790,6 +816,9 @@ function API.syncAllItems(progress_callback)
 	local stmt_changes = db:prepare(ZOTERO_DB_CHANGES)
 	
     local headers = API.getHeaders(api_key)
+    local key_url = ("https://api.zotero.org/users/%s/keys/current"):format(user_id)
+    API.checkZoteroKey(key_url, headers)
+    
     local items_url = ("https://api.zotero.org/users/%s/items?since=%s&includeTrashed=true"):format(user_id, since)
     local collections_url = ("https://api.zotero.org/users/%s/collections?since=%s&includeTrashed=true"):format(user_id, since)
 
@@ -1607,8 +1636,8 @@ function API.attachItemAnnotations(item, annotation_callback)
 			if zoteroItems[ann.zoteroKey] ~= nil then
 				localZotAnn[ann.zoteroKey] = { ["position"] = idx, ["version"] = ann.zoteroVersion }
 			elseif ann.zoteroVersion < libVersion then
-				logger.info("Delete Zotero annotation "..ann.zoteroKey)
---				koreaderAnnotations[idx] = nil			
+				logger.info("Delete local Zotero annotation "..ann.zoteroKey)
+				table.remove(koreaderAnnotations, idx)
 			end
 		end
 	end
