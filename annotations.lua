@@ -41,6 +41,7 @@ local Z2K_STYLE = {
     ["highlight"] = "lighten",
 }
 
+
 local defaultKColor = "yellow"
 local defaultZColor = K2Z_COLORS["gray"]
 
@@ -112,6 +113,14 @@ function Annotations.localFromUtc(utc_timestamp)
 end
 
 
+function Annotations.supportedZoteroTypes()
+
+	local types = {}
+	for key, _ in pairs(Z2K_STYLE) do
+		table.insert(types, key)
+	end
+	return types
+end
 
 function Annotations.colorZoteroToKOReader(hex_code)
 
@@ -126,6 +135,12 @@ function Annotations.annotationTypeKOReaderToZotero(type)
     return K2Z_STYLE[string.lower(type)]
 end
 
+-- Generate a annotationSortIndex based on page, offset and miny 
+function Annotations.makeSortIndex(page, offset, miny)
+	local zoteroSortIndex = string.format("%05d|%06d|%05d", page-1, offset, math.max(0, math.floor(miny)))
+	return zoteroSortIndex
+end
+
 function Annotations.convertKOReaderToZotero(annotation, page_height, parent_key)
     local date = Annotations.utcFromLocal(annotation.datetime)
     local color = defaultZColor
@@ -138,6 +153,7 @@ function Annotations.convertKOReaderToZotero(annotation, page_height, parent_key
     -- towards the bottom.
     -- Therefore, we need to transform coordinates before uploading them to Zotero
     local digits = 2
+    local miny = page_height
     for _, pbox in ipairs(annotation.pboxes) do
         local x1 = pbox.x
         local y1 = page_height - pbox.y - pbox.h
@@ -145,11 +161,13 @@ function Annotations.convertKOReaderToZotero(annotation, page_height, parent_key
         local y2 = y1 + pbox.h
 
         table.insert(rects, {limitDigits(x1,digits), limitDigits(y1,digits), limitDigits(x2,digits), limitDigits(y2,digits)})
+		if pbox.y < miny then miny = pbox.y end
     end
 
 	-- make 'fake' sort key
-	local zoteroSortIndex = string.format("%05d|%05d|%05d", annotation.pageno-1, 0, math.floor(annotation.pos0.x))
-    -- gets rejected!! Leave it for now
+	-- middle parameter should be offset (number of characters on page before the highlighted text?)
+	-- we don't know this
+	local zoteroSortIndex = Annotations.makeSortIndex(annotation.pageno, 0, miny)
     
     local ZAnnotation = {
         ["itemType"] = "annotation",
@@ -157,7 +175,7 @@ function Annotations.convertKOReaderToZotero(annotation, page_height, parent_key
         ["annotationType"] = type,
         ["annotationColor"] = color,
         ["annotationPageLabel"] = tostring(annotation.page),
---        ["annotationSortIndex"] = zoteroSortIndex,
+        ["annotationSortIndex"] = zoteroSortIndex,
         ["annotationPosition"] = JSON.encode({
             ["pageIndex"] = annotation.pageno - 1,
             ["rects"] = rects,

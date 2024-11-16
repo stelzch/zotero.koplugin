@@ -32,6 +32,8 @@ local SUPPORTED_MEDIA_TYPES = {
     [3] = "text/html"
 }
 
+local ZOTERO_BASE_URL = "https://api.zotero.org"
+
 local ZOTERO_DB_SCHEMA = [[
 CREATE TABLE IF NOT EXISTS itemData (
 	itemID INTEGER PRIMARY KEY,    
@@ -438,8 +440,41 @@ INSERT INTO attachment_versions(key,version)
 -- to check whether changes where made
 local ZOTERO_DB_CHANGES = [[ SELECT changes() ]]
 
+-- Return some basic stats about database
+local ZOTERO_DB_STATS = 
+[[SELECT
+	collections,
+	allItems,
+	attachments,
+	annotations
+FROM
+	(
+	SELECT
+		COUNT(collectionID) AS collections
+	FROM
+		collections
+	),(
+	SELECT
+		COUNT(itemID) AS allItems
+	FROM
+		items
+	),(
+	SELECT
+		COUNT(itemID) AS attachments
+	FROM
+		itemAttachments
+	),(
+	SELECT
+		COUNT(itemID) AS annotations
+	FROM
+		itemAnnotations
+	);
+]]
+
 local function file_exists(path)
     if path == nil then return nil end
+    local info = lfs.attributes(path)
+    print(JSON.encode(info))
     return lfs.attributes(path) ~= nil
 end
 
@@ -528,6 +563,10 @@ function API.init(zotero_dir)
     API.db_path = BaseUtil.joinPath(API.zotero_dir, "zotero.db")
     logger.info("Zotero: opening db path ", API.db_path)
     local db = API.openDB()
+    local stats = {}
+	--local c, i, a, n = db:rowexec(ZOTERO_DB_STATS)
+	--local stats = { ["collections"] = c, ["items"] = i, ["attachments"] = a, ["annotations"] = n }
+	--logger.info(JSON.encode(stats))
 
     --db:exec(ZOTERO_CREATE_VIEWS)
 end
@@ -641,8 +680,12 @@ function API.getModifiedItems()
 end
 
 -- https get call which decodes JSON data 
-function API.getZoteroData(page_url, headers)
+function API.getZoteroData(page_url)
 
+	local headers = API.zoteroHeader
+	if headers == nil then
+		return nil, "Error: zotero header not set. Check user ID and API key"
+	end
 	local page_data = {}
 	local r, c, h = https.request {
 		method = "GET",
@@ -667,10 +710,10 @@ end
 function API.checkZoteroKey(page_url, headers)
 
 	if API.access == nil then
-		local result, header = API.getZoteroData(page_url, headers)
+		local result, header = API.getZoteroData(page_url)
 		if result ~= nil then 
 			logger.info(JSON.encode(result.access))
-			logger.info(header)
+			--logger.info(header)
 			local db = API.openDB()
 			local sql = "SELECT userID FROM libraries WHERE libraryID=1;"
 			local uID = db:rowexec(sql)
@@ -746,7 +789,7 @@ function API.fetchCollectionPaginated(collection_url, headers, callback)
     for item_nr = 0, collection_size, step_size do
         local page_url = ("%s&limit=%i&start=%i"):format(collection_url, step_size, item_nr)
 
-		local result, header = API.getZoteroData(page_url, headers)
+		local result, header = API.getZoteroData(page_url)
 		if result == nil then return nil, header end
 		library_version = header["last-modified-version"]
 		
@@ -780,7 +823,14 @@ function API.ensureKeyAndID()
     elseif api_key == "" then
         return "Error: must set API Key"
     end
-
+	-- generate the headers we will need
+	API.zoteroHeader = {
+        ["zotero-api-key"] = api_key,
+        ["zotero-api-version"] = "3"
+    }
+    -- generate the user library base URL
+    API.userLibraryURL = ZOTERO_BASE_URL..("/users/%s"):format(user_id)
+    
     return nil, api_key, user_id
 end
 
@@ -815,12 +865,12 @@ function API.syncAllItems(progress_callback)
     -- to check whether changes where made
 	local stmt_changes = db:prepare(ZOTERO_DB_CHANGES)
 	
-    local headers = API.getHeaders(api_key)
-    local key_url = ("https://api.zotero.org/users/%s/keys/current"):format(user_id)
+    local headers = API.zoteroHeader
+    local key_url = API.userLibraryURL.."/keys/current"
     API.checkZoteroKey(key_url, headers)
     
-    local items_url = ("https://api.zotero.org/users/%s/items?since=%s&includeTrashed=true"):format(user_id, since)
-    local collections_url = ("https://api.zotero.org/users/%s/collections?since=%s&includeTrashed=true"):format(user_id, since)
+    local items_url = API.userLibraryURL..("/items?since=%s&includeTrashed=true"):format(since)
+    local collections_url = API.userLibraryURL..("/collections?since=%s&includeTrashed=true"):format(since)
 
 	-- next is used to check whether table has entries. Apparently defining it as a local var makes this more efficient.
 	local next = next	
@@ -888,6 +938,8 @@ function API.syncAllItems(progress_callback)
 	local attachments = {}
 	local annotations = {}
 	
+	local annotationTypes = Annotations.supportedZoteroTypes()
+	
     r, e = API.fetchCollectionPaginated(items_url, headers, function(partial_entries, percentage)
         callback(string.format("Syncing items %.0f%%", percentage))
         for i = 1, #partial_entries do
@@ -897,6 +949,7 @@ function API.syncAllItems(progress_callback)
             
             if item.data.deleted then
 				logger.info("Item "..key.." has been deleted.")
+				-- check if we have this item in the local database; if so, delete it:
 				local res = stmt_get_ItemVersion:reset():bind(key):step()
 				if res ~= nil then 
 					stmt_delete_item:reset():bind(key):step()
@@ -905,7 +958,8 @@ function API.syncAllItems(progress_callback)
 						--logger.info("Changes: ", tonumber(cnt[1]))
 					--end
 				end
-			else
+			else  -- not a deleted item, so we might want to add it to the local database
+
 				-- remove some unused data
 				item.links = nil
 				item.library = nil
@@ -916,16 +970,22 @@ function API.syncAllItems(progress_callback)
 					--print("Changes: ", tonumber(cnt[1]))
 				--end
 				stmt_update_itemData:reset():bind(key, JSON.encode(item)):step()
+				
+				-- Set the correct collection for the new item:
 				if item.data.collections ~= nil then
 					local itemCol = item.data.collections[1]
 					if itemCol == nil then itemCol = '/' end
 					logger.info("Item "..key.." is part of collection "..itemCol)
 					stmt_update_collectionItems:reset():bind(itemCol, key):step()
 				end
-				if item.data.itemType == 'attachment' then
-				-- if there is no parent item then use the item as its own parent
-					attachments[key] = item.data.parentItem or key
-				elseif item.data.itemType == 'annotation' then
+				
+				-- Check if it is a (supported) attachment or annotation
+				-- If so, add it to the relevant table
+				if (item.data.itemType == 'attachment' 
+					and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType)) then
+						attachments[key] = item.data.parentItem or key -- if there is no parent item then use the item as its own parent
+				elseif (item.data.itemType == 'annotation' 
+						and table_contains(annotationTypes, item.data.annotationType)) then
 					annotations[key] = item.data.parentItem
 				end
 			end
@@ -1337,14 +1397,17 @@ function API.createItems(items)
             return created_items, "Error: failed to parse JSON in response to annotation creation request"
         end
         
-        local new_library_version = response_headers["last-modified-version"]
---        print("New lib version: ", new_library_version)
-        if new_library_version ~= nil then
-            API.setLibraryVersion(new_library_version)
-        else
-            logger.err("Z: could not update library version from create request, got " .. tostring(new_library_version))
-        end
-
+        -- Maybe don't update library version in here, becase we can't be sure that we have synced all items yet
+        -- Should run a library update after we have finished creating new items...
+        
+        --local new_library_version = response_headers["last-modified-version"]
+----        print("New lib version: ", new_library_version)
+        --if new_library_version ~= nil then
+            --API.setLibraryVersion(new_library_version)
+        --else
+            --logger.err("Z: could not update library version from create request, got " .. tostring(new_library_version))
+        --end
+		--print(JSON.encode(result))
         for k,v in pairs(result["successful"]) do
             local index = start_item + tonumber(k) + 1
             created_items[index] = v
@@ -1451,7 +1514,7 @@ function API.syncItemAnnotations(item, annotation_callback)
                 if ann.drawer ~= nil then -- it's a note or highlight
                     logger.dbg("Zotero: Additional KOReader annotation: "..ann.text)
                     -- make 'fake' sort key
-                    koreaderAnnotations[idx].zoteroSortIndex = string.format("%05d|%05d|%05d", ann.page-1, idx, math.floor(ann.pos0.x))
+                    koreaderAnnotations[idx].zoteroSortIndex = string.format("%05d|%06d|%05d", ann.page-1, idx, math.floor(ann.pos0.y))
                     --print(koreaderAnnotations[idx].zoteroSortIndex)
                     table.insert(localKORAnn, idx)
                     localMods = localMods + 1
@@ -1652,6 +1715,7 @@ function API.attachItemAnnotations(item, annotation_callback)
 		local item = API.getItem(key)
 		print(key, JSON.encode(localZotAnn[key]))
 		if localZotAnn[key] == nil then
+			--print(JSON.encode(item))
 			table.insert(koreaderAnnotations, Annotations.convertZoteroToKOReader(item, pageHeight))
 		elseif localZotAnn[key].version < itemInfo.version then
 			logger.info("Updating annotation "..key)
