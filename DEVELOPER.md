@@ -33,7 +33,7 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 	
 - [x] Make an 'itemAnnotation' table
 	- [] use it to track synced version
-	- [x] use it to identify children
+	- [x] use it to identify parent
 
 - [] remove redundant code
 

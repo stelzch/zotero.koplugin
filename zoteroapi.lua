@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS itemAttachments (
 	itemID INTEGER PRIMARY KEY, 
 	parentItemID INT,
 	syncedVersion INT NOT NULL DEFAULT 0,
+	lastSync INT NOT NULL DEFAULT 0
 	FOREIGN KEY (itemID) REFERENCES items(itemID) ON DELETE CASCADE,
 	FOREIGN KEY (parentItemID) REFERENCES items(itemID) ON DELETE CASCADE
 );
@@ -411,14 +412,14 @@ local ZOTERO_GET_ITEM_VERSION = [[ SELECT version, itemID FROM items WHERE key =
 
 -- Return synced version accoring to database for item identified by its key. Also return lastest version and itemID 
 local ZOTERO_GET_ATTACHMENT_VERSION = [[ 
-SELECT syncedVersion, version, items.itemID
+SELECT syncedVersion, lastSync, version, items.itemID
 FROM itemAttachments INNER JOIN items ON itemAttachments.itemID = items.itemID 
 WHERE key = ?;
 ]]
 
 -- set synced version using the itemID (not key!) as the 1st aparameter, and verison number as the 2nd
 local ZOTERO_SET_ATTACHMENT_SYNCEDVERSION = [[ 
-UPDATE itemAttachments SET syncedVersion = ?2 WHERE itemID = ?1
+UPDATE itemAttachments SET syncedVersion = ?2, lastSync = unixepoch('now') WHERE itemID = ?1
 ]]
 
 -- Return key and filenames for all locally synced attachments. 
