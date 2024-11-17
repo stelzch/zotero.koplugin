@@ -10,22 +10,24 @@ This addon for [KOReader](https://github.com/koreader/koreader) allows you to vi
 ## Features
 * Synchronization via Zotero Web API
 * Open attached PDF/EPUB/HTML files
-* Upload KOReader annotations to Zotero
+* Download Zotero annotations of pdf files
+* Upload new KOReader annotations on pdf files to Zotero
 * Automatically download items of selected collections at sync time
 * Supports WebDAV storage backend
-* Search entries by the title of the publication, name of the first author or DOI.
+* Search entries by the title of the publication or name of the first author.
 
 ### Limitations
 
-* Currently, this plugin _only supports uploading annotations_ made with KOReader to Zotero. Changes and deletions made either in KOReader itself or Zotero will not be synchronized.
-* Annotations are not written into the PDF file itself, meaning they are only visible in Zotero's built-in PDF reader.
+* Currently, this plugin _only supports uploading new annotations_ made with KOReader to Zotero. Changes and deletions made in KOReader will not be synchronized. But changes made in Zotero will be synchronised.
+* Annotations only work for pdf files, not epub or other
+* Search function currently quite limited, no real access to full author lists, DOIs, tags, etc.
 
 
 ## Installation Guide
 1. Ensure you are running the latest version of KOReader
 2. Copy the files in this repository to `<KOReader>/plugins/zotero.koplugin`
 3. Obtain an API token for your account by generating a new key in your [Zotero Settings](https://www.zotero.org/settings/keys). Note the userID and the private key.
-5. If applicable, obtain username and password for your WebDAV storage.
+5. If applicable, obtain username and password for your WebDAV storage (see below).
 6. Set your credentials for Zotero either directly in KOReader or edit the configuration file as described [below](#manual-configuration).
 
 
