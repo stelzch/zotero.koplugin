@@ -577,6 +577,7 @@ function API.getAPIKey()
 end
 function API.setAPIKey(api_key)
     API.settings:saveSetting("api_key", api_key)
+    API.zoteroAcessVerified = false
 end
 
 function API.getUserID()
@@ -585,6 +586,7 @@ end
 
 function API.setUserID(user_id)
     API.settings:saveSetting("user_id", user_id)
+    API.zoteroAcessVerified = false
 end
 
 function API.getWebDAVEnabled()
@@ -685,7 +687,7 @@ function API.getZoteroData(page_url)
 
 	local headers = API.zoteroHeader
 	if headers == nil then
-		return nil, "Error: zotero header not set. Check user ID and API key"
+		return nil, "Error: Zotero header not set. Check user ID and API key"
 	end
 	local page_data = {}
 	local r, c, h = https.request {
@@ -708,12 +710,14 @@ function API.getZoteroData(page_url)
 	end    
 end
 
+-- Check the access provided by the Zotero API key
+-- If needed, update info about library
 function API.checkZoteroKey(page_url, headers)
 
 	if API.access == nil then
-		local result, header = API.getZoteroData(page_url)
+		local result, e = API.getZoteroData(page_url)
 		if result ~= nil then 
-			logger.info(JSON.encode(result.access))
+			logger.dbg("Zotero: Access: "..JSON.encode(result.access))
 			--logger.info(header)
 			local db = API.openDB()
 			local sql = "SELECT userID FROM libraries WHERE libraryID=1;"
@@ -726,6 +730,8 @@ function API.checkZoteroKey(page_url, headers)
 			-- should check that it is still the same user library and that we have sufficient access...
 			end
 			API.access = result.access
+		else
+			return nil, "Zotero API key check: "..e
 		end
 	end
 	return API.access
@@ -816,22 +822,32 @@ function API.fetchCollectionPaginated(collection_url, headers, callback)
 end
 
 function API.ensureKeyAndID()
-    local user_id = API.settings:readSetting("user_id", "")
-    local api_key = API.settings:readSetting("api_key", "")
+	if API.zoteroAcessVerified then
+		-- nothing to do here
+	else
+		local user_id = API.settings:readSetting("user_id", "")
+		local api_key = API.settings:readSetting("api_key", "")
 
-    if user_id == "" then
-        return "Error: must set User ID"
-    elseif api_key == "" then
-        return "Error: must set API Key"
-    end
-	-- generate the headers we will need
-	API.zoteroHeader = {
-        ["zotero-api-key"] = api_key,
-        ["zotero-api-version"] = "3"
-    }
-    -- generate the user library base URL
-    API.userLibraryURL = ZOTERO_BASE_URL..("/users/%s"):format(user_id)
-    
+		if user_id == "" then
+			return "Error: must set User ID"
+		elseif api_key == "" then
+			return "Error: must set API Key"
+		end
+		API.zoteroAcessVerified = true
+		-- generate the headers we will need
+		API.zoteroHeader = {
+			["zotero-api-key"] = api_key,
+			["zotero-api-version"] = "3"
+		}
+		-- generate the user library base URL
+		API.userLibraryURL = ZOTERO_BASE_URL..("/users/%s"):format(user_id)
+		-- check access of API key
+		local key_url = API.userLibraryURL.."/keys/current"
+		local access, e = API.checkZoteroKey(key_url, headers)
+		if access == nil then
+			return e
+		end
+	end
     return nil, api_key, user_id
 end
 
@@ -852,9 +868,15 @@ function API.syncAllItems(progress_callback)
     local e, api_key, user_id = API.ensureKeyAndID()
     if e ~= nil then return e end
     
+    local err
     if since > 0 then 
     -- try to sync back first, so that any changes will be recorded when we update te db later on
-		API.syncAnnotations()
+		if (API.access.user.write and API.access.user.notes) then
+			API.syncAnnotations()
+		else
+			err = "Zotero: API key does not have write access!"
+			logger.warn(err)
+		end
 	end
 	
 	local stmt_update_item = db:prepare(ZOTERO_DB_UPDATE_ITEM)
@@ -867,8 +889,6 @@ function API.syncAllItems(progress_callback)
 	local stmt_changes = db:prepare(ZOTERO_DB_CHANGES)
 	
     local headers = API.zoteroHeader
-    local key_url = API.userLibraryURL.."/keys/current"
-    API.checkZoteroKey(key_url, headers)
     
     local items_url = API.userLibraryURL..("/items?since=%s&includeTrashed=true"):format(since)
     local collections_url = API.userLibraryURL..("/collections?since=%s&includeTrashed=true"):format(since)
@@ -1015,12 +1035,11 @@ function API.syncAllItems(progress_callback)
 		end
 		stmt_insert_annotations:close()
 	end
-
 	
     API.batchDownload(callback)
---    API.syncAnnotations()
 
-    return nil
+	-- err might show error for annotation upload which we have ignored so far..
+    return err
 end
 
 function API.getDirAndPath(item)
@@ -1101,12 +1120,13 @@ function API.downloadAndGetPath(key, download_callback)
     local targetDir, targetPath = API.getDirAndPath(item)
     lfs.mkdir(targetDir)
 
-    local local_version, itemVersion, itemID = API.getAttachmentVersion(key)
+    local local_version, lastSync, itemVersion, itemID = API.getAttachmentVersion(key)
 	logger.info("ItemID: "..itemID..", local items: "..local_version.." item version: "..itemVersion)
     if local_version ~= nil and local_version >= item.version and file_exists(targetPath) then
 		logger.info("Up-to-date local file. No need for download.")
 		--API.syncItemAnnotations(item)
 		API.attachItemAnnotations(item)
+		API.setAttachmentVersion(itemID, item.version)
         return targetPath, nil -- all done, local file is up to date
     end
 
