@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS itemAttachments (
 	itemID INTEGER PRIMARY KEY, 
 	parentItemID INT,
 	syncedVersion INT NOT NULL DEFAULT 0,
-	lastSync INT NOT NULL DEFAULT 0
+	lastSync INT NOT NULL DEFAULT 0,
 	FOREIGN KEY (itemID) REFERENCES items(itemID) ON DELETE CASCADE,
 	FOREIGN KEY (parentItemID) REFERENCES items(itemID) ON DELETE CASCADE
 );
@@ -475,7 +475,7 @@ FROM
 local function file_exists(path)
     if path == nil then return nil end
     local info = lfs.attributes(path)
-    print(JSON.encode(info))
+    --print(JSON.encode(info))
     return lfs.attributes(path) ~= nil
 end
 
@@ -821,7 +821,8 @@ function API.fetchCollectionPaginated(collection_url, headers, callback)
 
 end
 
-function API.ensureKeyAndID()
+-- Verify that we can access Zotero API
+function API.verifyZoteroAccess()
 	if API.zoteroAcessVerified then
 		-- nothing to do here
 	else
@@ -848,7 +849,7 @@ function API.ensureKeyAndID()
 			return e
 		end
 	end
-    return nil, api_key, user_id
+    return nil
 end
 
 function API.getHeaders(api_key)
@@ -865,7 +866,8 @@ function API.syncAllItems(progress_callback)
     local since = API.getLibraryVersion()
 	--logger.info("Local Zotero lib version: "..since)
 	
-    local e, api_key, user_id = API.ensureKeyAndID()
+	-- verify access
+    local e = API.verifyZoteroAccess()
     if e ~= nil then return e end
     
     local err
@@ -1101,7 +1103,8 @@ end
 -- Before the download, the download_callback is called.
 -- Returns tuple with path and error, if path is correct then error is nil.
 function API.downloadAndGetPath(key, download_callback)
-    local e, api_key, user_id = API.ensureKeyAndID()
+
+    local e = API.verifyZoteroAccess()
     if e ~= nil then return nil, e end
 
     local item = API.getItem(key)
@@ -1121,7 +1124,7 @@ function API.downloadAndGetPath(key, download_callback)
     lfs.mkdir(targetDir)
 
     local local_version, lastSync, itemVersion, itemID = API.getAttachmentVersion(key)
-	logger.info("ItemID: "..itemID..", local items: "..local_version.." item version: "..itemVersion)
+	logger.info("ItemID:", itemID,", local items:",local_version, lastSync, ", item version:", itemVersion)
     if local_version ~= nil and local_version >= item.version and file_exists(targetPath) then
 		logger.info("Up-to-date local file. No need for download.")
 		--API.syncItemAnnotations(item)
@@ -1143,7 +1146,7 @@ function API.downloadAndGetPath(key, download_callback)
 
         local r, c, h = https.request {
             url = url,
-            headers = API.getHeaders(api_key),
+            headers = API.zoteroHeader,
             sink = ltn12.sink.file(io.open(targetPath, "wb"))
         }
 
@@ -1334,7 +1337,7 @@ function API.getAttachmentVersion(key)
     if nr == 0 then
         return nil
     else
-        return tonumber(result[1][1]), tonumber(result[2][1]), tonumber(result[3][1])
+        return tonumber(result[1][1]), tonumber(result[2][1]), tonumber(result[3][1]), tonumber(result[4][1])
     end
 
 end
@@ -1382,12 +1385,12 @@ function API.createItems(items)
         table.insert(created_items, nil)
     end
 
-    local e, api_key, user_id = API.ensureKeyAndID()
+    local e = API.verifyZoteroAccess()
     if e ~= nil then
         return created_items, e
     end
-    local headers = API.getHeaders(api_key)
-    local create_url = ("https://api.zotero.org/users/%s/items"):format(user_id)
+    local headers = API.zoteroHeader
+    local create_url = API.userLibraryURL.."/items"
 
 
     for request_no=1,total_requests do
