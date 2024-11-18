@@ -214,20 +214,6 @@ local ZOTERO_DB_INIT_COLLECTIONS = [[
 INSERT INTO collections(collectionName, libraryID, key) SELECT '',1,'/' WHERE NOT EXISTS(SELECT collectionID FROM collections);
 ]]
 
-local ZOTERO_GET_DOWNLOAD_QUEUE = [[
-select
-    item_download_queue.key,
-    jsonb_extract(items.value, '$.data.filename') as filename
-from item_download_queue
-left join items on items.key = item_download_queue.key;
-]]
-
-local ZOTERO_GET_DOWNLOAD_QUEUE_SIZE = [[ SELECT COUNT(*) FROM item_download_queue; ]]
-
-local ZOTERO_GET_LOCAL_PDF_ITEMS = [[ SELECT * FROM local_pdf_items; ]]
-
-local ZOTERO_GET_LOCAL_PDF_ITEMS_SIZE = [[ SELECT COUNT(*) FROM local_pdf_items; ]]
-
 local ZOTERO_DB_UPDATE_ITEM = [[
 INSERT INTO items(itemTypeID, libraryID, key, version) SELECT itemTypeID, ?1, ?3, ?4 FROM itemTypes WHERE typeName IS ?2 
 ON CONFLICT DO UPDATE SET itemTypeID = excluded.itemTypeID, version = excluded.version;
@@ -258,16 +244,6 @@ INSERT INTO collectionItems(collectionID, itemID) SELECT collections.collectionI
 ON CONFLICT DO NOTHING;
 ]]
 local ZOTERO_GET_COLLECTION_VERSION = [[ SELECT version, collectionID FROM collections WHERE key = ?; ]]
-
-local ZOTERO_DB_DELETE = [[
-DELETE FROM libraries;
-DELETE FROM items;
-DELETE FROM itemData;
-DELETE FROM collections;
---DELETE FROM offline_collections;
-DELETE FROM attachment_versions;
-PRAGMA user_version = 0;
-]]
 
 local ZOTERO_GET_DB_VERSION = [[ PRAGMA user_version; ]]
 
@@ -410,7 +386,7 @@ ON CONFLICT DO UPDATE SET parentItemID = excluded.parentItemID;
 
 local ZOTERO_GET_ITEM_VERSION = [[ SELECT version, itemID FROM items WHERE key = ?; ]]
 
--- Return synced version accoring to database for item identified by its key. Also return lastest version and itemID 
+-- Return synced version according to database for item identified by its key. Also return lastest version and itemID 
 local ZOTERO_GET_ATTACHMENT_VERSION = [[ 
 SELECT syncedVersion, lastSync, version, items.itemID
 FROM itemAttachments INNER JOIN items ON itemAttachments.itemID = items.itemID 
@@ -1141,7 +1117,7 @@ function API.downloadAndGetPath(key, download_callback)
             return nil, errormsg
         end
     else
-        local url = "https://api.zotero.org/users/" .. API.getUserID() .. "/items/" .. key .. "/file"
+        local url = API.userLibraryURL .. "/items/" .. key .. "/file"
         logger.dbg("Zotero: fetching " .. url)
 
         local r, c, h = https.request {
@@ -1297,8 +1273,6 @@ function API.resetSyncState()
     if not os.rename(API.db_path, bak_path) then
 		os.delete(API.db_path)
 	end
-    --local db = API.openDB()
-    --db:exec(ZOTERO_DB_DELETE)    
 end
 
 
