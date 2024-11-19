@@ -24,7 +24,7 @@ local Geom = require("ui/geometry")
 -- /storage/<KEY>/version: Version number of downloaded attachment
 -- /meta.lua: Metadata containing library version, items etc.
 
-local API = {}
+local API = { ["version"] = "JA sqlite v0.9"}
 
 local SUPPORTED_MEDIA_TYPES = {
     [1] = "application/pdf",
@@ -418,16 +418,16 @@ INSERT INTO attachment_versions(key,version)
 local ZOTERO_DB_CHANGES = [[ SELECT changes() ]]
 
 -- Return some basic stats about database
-local ZOTERO_DB_STATS = 
-[[SELECT
-	collections,
+local ZOTERO_DB_STATS = [[
+SELECT
+	colls,
 	allItems,
 	attachments,
 	annotations
 FROM
 	(
 	SELECT
-		COUNT(collectionID) AS collections
+		COUNT(collectionID) AS colls
 	FROM
 		collections
 	),(
@@ -541,6 +541,15 @@ function API.init(zotero_dir)
     logger.info("Zotero: opening db path ", API.db_path)
     local db = API.openDB()
     local stats = {}
+
+    -- get file modification time (to provide some indication of 'version')
+    local path = debug.getinfo(1, "S").source:sub(2)
+	local ts = lfs.attributes(path, "modification")
+	API.version = API.version.." ("..os.date("%Y-%m-%d %X",ts)..")" 
+	logger.info("Zotero version: "..API.version)
+
+    --local stmt_stats = db:prepare(ZOTERO_DB_STATS)
+	--local stats, n = stmt_stats:step()
 	--local c, i, a, n = db:rowexec(ZOTERO_DB_STATS)
 	--local stats = { ["collections"] = c, ["items"] = i, ["attachments"] = a, ["annotations"] = n }
 	--logger.info(JSON.encode(stats))
