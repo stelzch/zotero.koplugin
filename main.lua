@@ -372,10 +372,29 @@ function Plugin:addToMainMenu(menu_items)
                         callback = function()
                             self:setItemsPerPage()
                         end,
-
                     },
                 }
-            }
+            },
+            {
+                text = _("About/Info"),
+                callback = function()
+					local version = ZoteroAPI.version
+					local stats = ZoteroAPI.getStats()
+					UIManager:show(InfoMessage:new{
+						text = _("Plugin version: \n"..version..
+						"\n\nLibrary stats:\n\tVersion:\t\t\t"..stats.libVersion..
+						"\n\tCollections:\t\t"..stats.collections..
+						'\n\tTotal items:\t\t'..stats.items..
+						"\n\tAttachments:\t"..stats.attachments..
+						"\n\tAnnotations:\t"..stats.annotations.."\n"),
+						--timeout = 10,
+						--icon = "notice"
+						show_icon = false,
+					})
+
+                    return nil
+                end,
+			}
         },
     }
 end
