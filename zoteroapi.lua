@@ -445,6 +445,7 @@ FROM
 		COUNT(itemID) AS annotations
 	FROM
 		itemAnnotations
+	)
 	);
 ]]
 
@@ -548,14 +549,22 @@ function API.init(zotero_dir)
 	API.version = API.version.." ("..os.date("%Y-%m-%d %X",ts)..")" 
 	logger.info("Zotero version: "..API.version)
 
-    --local stmt_stats = db:prepare(ZOTERO_DB_STATS)
-	--local stats, n = stmt_stats:step()
-	--local c, i, a, n = db:rowexec(ZOTERO_DB_STATS)
-	--local stats = { ["collections"] = c, ["items"] = i, ["attachments"] = a, ["annotations"] = n }
-	--logger.info(JSON.encode(stats))
-
-    --db:exec(ZOTERO_CREATE_VIEWS)
 end
+
+function API.getStats()
+    local db = API.openDB()
+
+	--local c, i, a, n = db:rowexec(ZOTERO_DB_STATS)
+	local c = tonumber(db:rowexec("SELECT COUNT(*) FROM collections;"))
+	local i = tonumber(db:rowexec("SELECT COUNT(*) FROM items;"))
+	local a = tonumber(db:rowexec("SELECT COUNT(*) FROM itemAttachments;"))
+	local n = tonumber(db:rowexec("SELECT COUNT(*) FROM itemAnnotations;"))
+	local stats = { ["libVersion"] = API.getLibraryVersion(), ["collections"] = c, ["items"] = i, ["attachments"] = a, ["annotations"] = n }
+	logger.info(JSON.encode(stats))
+	
+    return stats
+end
+
 
 function API.getAPIKey()
     return API.settings:readSetting("api_key")
@@ -1025,6 +1034,8 @@ function API.syncAllItems(progress_callback)
 	
     API.batchDownload(callback)
 
+	API.getStats()
+
 	-- err might show error for annotation upload which we have ignored so far..
     return err
 end
@@ -1192,6 +1203,7 @@ function API.getWebDAVHeaders()
         ["Authorization"] = "Basic " .. sha2.bin_to_base64(user .. ":" .. pass)
     }
 end
+
 
 -- Download all files that are part of an offline collection
 function API.batchDownload(progress_callback)
