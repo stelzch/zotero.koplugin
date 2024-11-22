@@ -481,6 +481,8 @@ local function file_slurp(path)
     return content
 end
 
+-- Open the sqlite database. When opening it for the first time also get the current database version.
+-- If sqlite library is empty make sure the required tables are set up
 function API.openDB()
     if API.db ~= nil then
         return API.db
@@ -526,6 +528,7 @@ function API.closeDB()
     API.libVersion = nil
 end
 
+-- Initialise plugin by setting correct path and opening the sqlite database
 function API.init(zotero_dir)
     API.zotero_dir = zotero_dir
     local settings_path = BaseUtil.joinPath(API.zotero_dir, "meta.lua")
@@ -549,6 +552,7 @@ function API.init(zotero_dir)
 	API.version = API.version.." ("..os.date("%Y-%m-%d %X",ts)..")" 
 	logger.info("Zotero version: "..API.version)
 
+	--API.checkItemData()
 end
 
 function API.getStats()
@@ -853,6 +857,119 @@ function API.getHeaders(api_key)
     }
 end
 
+function API.setItemAttachments(attachments)
+    local db = API.openDB()
+	local stmt_insert_attachments = db:prepare(ZOTERO_INSERT_ITEM_ATTACHMENTS)
+	for item, parent in pairs(attachments) do
+		stmt_insert_attachments:reset():bind(item, parent):step()
+	end
+	stmt_insert_attachments:close()
+end
+
+function API.setAnnotations(annotations)
+    local db = API.openDB()
+	local stmt_insert_annotations = db:prepare(ZOTERO_INSERT_ITEM_ANNOTATIONS)
+	for item, parent in pairs(annotations) do
+		stmt_insert_annotations:reset():bind(item, parent):step()
+	end
+	stmt_insert_annotations:close()
+end
+
+---------------------
+-- Sync library items
+function API.fetchZoteroItems(since, progress_callback)
+    
+    local callback = progress_callback or function() end
+
+    local db = API.openDB()
+    if since == nil then  since = API.getLibraryVersion() end
+	-- verify access
+    local e = API.verifyZoteroAccess()
+    if e ~= nil then return e end
+    
+	local stmt_update_item = db:prepare(ZOTERO_DB_UPDATE_ITEM)
+    local stmt_update_itemData = db:prepare(ZOTERO_DB_UPDATE_ITEMDATA)
+	local stmt_get_ItemVersion = db:prepare(ZOTERO_GET_ITEM_VERSION)
+	local stmt_delete_item = db:prepare(ZOTERO_DB_DELETE_ITEM)
+	local stmt_update_collectionItems = db:prepare(ZOTERO_DB_UPDATE_COLLECTION_ITEMS)
+	
+    -- to check whether changes where made
+	local stmt_changes = db:prepare(ZOTERO_DB_CHANGES)
+	
+    local headers = API.zoteroHeader
+    
+    local items_url = API.userLibraryURL..("/items?since=%s&includeTrashed=true"):format(since)
+ 
+	local attachments = {}
+	local annotations = {}
+	
+	local annotationTypes = Annotations.supportedZoteroTypes()
+	
+    r, e = API.fetchCollectionPaginated(items_url, headers, function(partial_entries, percentage)
+        callback(string.format("Syncing items %.0f%%", percentage))
+        for i = 1, #partial_entries do
+            -- Ruthlessly update our local items
+            local item = partial_entries[i]
+            local key = item.key
+            
+            if item.data.deleted then
+				logger.info("Item "..key.." has been deleted.")
+				-- check if we have this item in the local database; if so, delete it:
+				local res = stmt_get_ItemVersion:reset():bind(key):step()
+				if res ~= nil then 
+					stmt_delete_item:reset():bind(key):step()
+					--local cnt = stmt_changes:reset():step()
+					--if cnt ~= nil then 
+						--logger.info("Changes: ", tonumber(cnt[1]))
+					--end
+				end
+			else  -- not a deleted item, so we might want to add it to the local database
+
+				-- remove some unused data
+				item.links = nil
+				item.library = nil
+
+				stmt_update_item:reset():bind(1, item.data.itemType, key, item.version):step()
+				--local cnt = stmt_changes:reset():step()
+				--if cnt ~= nil then 
+					--print("Changes: ", tonumber(cnt[1]))
+				--end
+				stmt_update_itemData:reset():bind(key, JSON.encode(item)):step()
+				
+				-- Set the correct collection for the new item:
+				if item.data.collections ~= nil then
+					local itemCol = item.data.collections[1]
+					if itemCol == nil then itemCol = '/' end
+					logger.info("Item "..key.." is part of collection "..itemCol)
+					stmt_update_collectionItems:reset():bind(itemCol, key):step()
+				end
+				
+				-- Check if it is a (supported) attachment or annotation
+				-- If so, add it to the relevant table
+				if (item.data.itemType == 'attachment' 
+					and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType)) then
+						attachments[key] = item.data.parentItem or key -- if there is no parent item then use the item as its own parent
+				elseif (item.data.itemType == 'annotation' 
+						and table_contains(annotationTypes, item.data.annotationType)) then
+					annotations[key] = item.data.parentItem
+				end
+			end
+        end
+    end)
+
+	-- deal with attachment items:
+	if next(attachments) ~= nil then
+		API.setItemAttachments(attachments)
+	end
+	
+	-- deal with annotation items:
+	if next(annotations) ~= nil then
+		API.setAnnotations(annotations)
+	end
+	
+	if e ~= nil then return e end
+end
+
 function API.syncAllItems(progress_callback)
     local callback = progress_callback or function() end
 
@@ -875,18 +992,11 @@ function API.syncAllItems(progress_callback)
 		end
 	end
 	
-	local stmt_update_item = db:prepare(ZOTERO_DB_UPDATE_ITEM)
-    local stmt_update_itemData = db:prepare(ZOTERO_DB_UPDATE_ITEMDATA)
-	local stmt_update_collectionItems = db:prepare(ZOTERO_DB_UPDATE_COLLECTION_ITEMS)
-	local stmt_get_ItemVersion = db:prepare(ZOTERO_GET_ITEM_VERSION)
-	local stmt_delete_item = db:prepare(ZOTERO_DB_DELETE_ITEM)
-	
     -- to check whether changes where made
 	local stmt_changes = db:prepare(ZOTERO_DB_CHANGES)
 	
     local headers = API.zoteroHeader
     
-    local items_url = API.userLibraryURL..("/items?since=%s&includeTrashed=true"):format(since)
     local collections_url = API.userLibraryURL..("/collections?since=%s&includeTrashed=true"):format(since)
 
 	-- next is used to check whether table has entries. Apparently defining it as a local var makes this more efficient.
@@ -949,97 +1059,71 @@ function API.syncAllItems(progress_callback)
 	end
     if e ~= nil then return e end
 		
-	---------------------
-    -- Sync library items
-    
-	local attachments = {}
-	local annotations = {}
+	API.fetchZoteroItems(since, callback)
 	
-	local annotationTypes = Annotations.supportedZoteroTypes()
-	
-    r, e = API.fetchCollectionPaginated(items_url, headers, function(partial_entries, percentage)
-        callback(string.format("Syncing items %.0f%%", percentage))
-        for i = 1, #partial_entries do
-            -- Ruthlessly update our local items
-            local item = partial_entries[i]
-            local key = item.key
-            
-            if item.data.deleted then
-				logger.info("Item "..key.." has been deleted.")
-				-- check if we have this item in the local database; if so, delete it:
-				local res = stmt_get_ItemVersion:reset():bind(key):step()
-				if res ~= nil then 
-					stmt_delete_item:reset():bind(key):step()
-					--local cnt = stmt_changes:reset():step()
-					--if cnt ~= nil then 
-						--logger.info("Changes: ", tonumber(cnt[1]))
-					--end
-				end
-			else  -- not a deleted item, so we might want to add it to the local database
-
-				-- remove some unused data
-				item.links = nil
-				item.library = nil
-
-				stmt_update_item:reset():bind(1, item.data.itemType, key, item.version):step()
-				--local cnt = stmt_changes:reset():step()
-				--if cnt ~= nil then 
-					--print("Changes: ", tonumber(cnt[1]))
-				--end
-				stmt_update_itemData:reset():bind(key, JSON.encode(item)):step()
-				
-				-- Set the correct collection for the new item:
-				if item.data.collections ~= nil then
-					local itemCol = item.data.collections[1]
-					if itemCol == nil then itemCol = '/' end
-					logger.info("Item "..key.." is part of collection "..itemCol)
-					stmt_update_collectionItems:reset():bind(itemCol, key):step()
-				end
-				
-				-- Check if it is a (supported) attachment or annotation
-				-- If so, add it to the relevant table
-				if (item.data.itemType == 'attachment' 
-					and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType)) then
-						attachments[key] = item.data.parentItem or key -- if there is no parent item then use the item as its own parent
-				elseif (item.data.itemType == 'annotation' 
-						and table_contains(annotationTypes, item.data.annotationType)) then
-					annotations[key] = item.data.parentItem
-				end
-			end
-        end
-    end)
-    if e ~= nil then return e end
-
     API.setLibraryVersion(r)
-	
-	-- deal with attachment items:
-	if next(attachments) ~= nil then
-	-- there are attachments
-		local stmt_insert_attachments = db:prepare(ZOTERO_INSERT_ITEM_ATTACHMENTS)
-		for item, parent in pairs(attachments) do
-			stmt_insert_attachments:reset():bind(item, parent):step()
-		end
-		stmt_insert_attachments:close()
-	end
-	
-	-- deal with annotation items:
-	if next(annotations) ~= nil then
-	-- there are annotations
-		local stmt_insert_annotations = db:prepare(ZOTERO_INSERT_ITEM_ANNOTATIONS)
-		for item, parent in pairs(annotations) do
-			stmt_insert_annotations:reset():bind(item, parent):step()
-		end
-		stmt_insert_annotations:close()
-	end
 	
     API.batchDownload(callback)
 
 	API.getStats()
-
 	-- err might show error for annotation upload which we have ignored so far..
     return err
 end
 
+---------------------
+-- Check (local) library items
+function API.checkItemData()
+    
+    local db = API.openDB()
+
+    local stmt = db:prepare([[SELECT json(value) FROM 
+    		itemData INNER JOIN items ON itemData.itemID = items.itemID]])
+
+	local stmt_update_collectionItems = db:prepare(ZOTERO_DB_UPDATE_COLLECTION_ITEMS)
+	
+    -- to check whether changes where made
+	local stmt_changes = db:prepare(ZOTERO_DB_CHANGES)
+	
+	local attachments = {}
+	local annotations = {}
+	
+	local annotationTypes = Annotations.supportedZoteroTypes()
+
+	db:exec("DELETE FROM collectionItems;")
+	db:exec("DELETE FROM itemAnnotations;")
+	db:exec("DELETE FROM itemAttachments;")
+    local row = stmt:reset():step()
+    local item
+    while row ~= nil do
+		item = JSON.decode(row[1])
+		
+		-- Set the correct collection for the new item:
+		if item.data.collections ~= nil then
+			--print("Item in collections: "..unpack(item.data.collections))
+			local itemCol = item.data.collections[1]
+			if itemCol == nil then itemCol = '/' end
+			logger.info("Item "..item.key.." is part of collection "..itemCol)
+			-- This works, but maybe better check if collection exists first? Then could delete item if collection no longer there...
+			stmt_update_collectionItems:reset():bind(itemCol, item.key):step()
+		end
+
+		-- Check if it is a (supported) attachment or annotation
+		-- If so, add it to the relevant table
+		if (item.data.itemType == 'attachment' 
+			and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType)) then
+				attachments[item.key] = item.data.parentItem or item.key -- if there is no parent item then use the item as its own parent
+		elseif (item.data.itemType == 'annotation' 
+				and table_contains(annotationTypes, item.data.annotationType)) then
+			annotations[item.key] = item.data.parentItem
+		end
+
+        row = stmt:step(row)
+    end
+    stmt:close()
+	API.setItemAttachments(attachments)
+	API.setAnnotations(annotations)
+end
+    
 function API.getDirAndPath(item)
     if item == nil then
         return nil, nil
