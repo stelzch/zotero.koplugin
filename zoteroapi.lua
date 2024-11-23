@@ -389,6 +389,10 @@ INSERT INTO itemAttachments(itemID, parentItemID) SELECT i.itemID, p.itemID AS p
 ON CONFLICT DO UPDATE SET parentItemID = excluded.parentItemID;
 ]]
 
+local ZOTERO_DELETE_ITEM_ATTACHMENT = [[
+DELETE FROM itemAttachments WHERE itemID IN (SELECT itemID FROM items WHERE key IS ?);
+]]
+
 local ZOTERO_UPSERT_ITEM_ANNOTATIONS = [[
 INSERT INTO itemAnnotations(itemID, parentItemID) SELECT i.itemID, p.itemID FROM items i, items p WHERE i.key = ?1 AND p.key=?2
 ON CONFLICT DO UPDATE SET parentItemID = excluded.parentItemID;
@@ -884,11 +888,13 @@ function API.setItemAttachments(attachments)
     local db = API.openDB()
 	local stmt_upsert_attachments = db:prepare(ZOTERO_UPSERT_ITEM_ATTACHMENTS)
 	local stmt_check_collection = db:prepare(ZOTERO_GET_COLLECTION_FOR_ITEM)
+	local stmt_delete = db:prepare(ZOTERO_DELETE_ITEM_ATTACHMENT)
 	for item, parent in pairs(attachments) do
 		if stmt_check_collection:reset():bind1(1, parent):step() then
 			stmt_upsert_attachments:reset():bind(item, parent):step()
 		else  -- parentItem is not part of a collection
-		-- should delete it
+			print("Deleting attachment "..item.." from itemsAttachment table")
+			stmt_delete:reset():bind1(1, item):step()
 		end
 	end
 	stmt_upsert_attachments:close()
@@ -923,9 +929,6 @@ function API.fetchZoteroItems(since, progress_callback)
 	local stmt_delete_item = db:prepare(ZOTERO_DB_DELETE_ITEM)
 	local stmt_update_collectionItems = db:prepare(ZOTERO_DB_UPDATE_COLLECTION_ITEMS)
 	
-    -- to check whether changes where made
-	local stmt_changes = db:prepare(ZOTERO_DB_CHANGES)
-	
     local headers = API.zoteroHeader
     
     local items_url = API.userLibraryURL..("/items?since=%s&includeTrashed=true"):format(since)
@@ -948,10 +951,6 @@ function API.fetchZoteroItems(since, progress_callback)
 				local res = stmt_get_ItemVersion:reset():bind(key):step()
 				if res ~= nil then 
 					stmt_delete_item:reset():bind(key):step()
-					--local cnt = stmt_changes:reset():step()
-					--if cnt ~= nil then 
-						--logger.info("Changes: ", tonumber(cnt[1]))
-					--end
 				end
 			else  -- not a deleted item, so we might want to add it to the local database
 
@@ -960,10 +959,6 @@ function API.fetchZoteroItems(since, progress_callback)
 				item.library = nil
 
 				stmt_update_item:reset():bind(1, item.data.itemType, key, item.version):step()
-				--local cnt = stmt_changes:reset():step()
-				--if cnt ~= nil then 
-					--print("Changes: ", tonumber(cnt[1]))
-				--end
 				stmt_update_itemData:reset():bind(key, JSON.encode(item)):step()
 				
 				-- Set the correct collection for the new item:
@@ -1160,7 +1155,7 @@ function API.checkItemData()
 			--print("Item in collections: "..unpack(item.data.collections))
 			local itemCol = item.data.collections[1]
 			if itemCol == nil then itemCol = '/' end
-			logger.info("Item "..item.key.." is part of collection "..itemCol)
+			--logger.info("Item "..item.key.." is part of collection "..itemCol)
 			-- This works, but maybe better check if collection exists first? Then could delete item if collection no longer there...
 			stmt_update_collectionItems:reset():bind(itemCol, item.key):step()
 		end

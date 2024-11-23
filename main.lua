@@ -315,6 +315,12 @@ function Plugin:addToMainMenu(menu_items)
                 end,
                 sub_item_table = {
                     {
+                        text = _("Re-analyse local items"),
+                        callback = function()
+                            ZoteroAPI.checkItemData()
+                        end,
+                    },
+                    {
                         text = _("Resync entire collection"),
                         callback = function()
                             ZoteroAPI.resetSyncState()
