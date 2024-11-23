@@ -318,6 +318,16 @@ WHERE
 --ORDER BY title);
 ]]
 
+local ZOTERO_GET_COLLECTION_FOR_ITEM = [[
+SELECT 
+	collectionID
+FROM 
+	collectionItems INNER JOIN items USING (itemID)
+WHERE
+	key = ?
+;
+]]
+
 
 local ZOTERO_GET_OFFLINE_COLLECTION_ATTACHMENTS = [[
 SELECT
@@ -374,12 +384,12 @@ WHERE
 	itemAnnotations.parentItemID IN (SELECT itemID FROM items WHERE key = ?1);
 ]]
 
-local ZOTERO_INSERT_ITEM_ATTACHMENTS = [[
+local ZOTERO_UPSERT_ITEM_ATTACHMENTS = [[
 INSERT INTO itemAttachments(itemID, parentItemID) SELECT i.itemID, p.itemID AS pID FROM items i, items p WHERE i.key = ?1 AND p.key=?2
 ON CONFLICT DO UPDATE SET parentItemID = excluded.parentItemID;
 ]]
 
-local ZOTERO_INSERT_ITEM_ANNOTATIONS = [[
+local ZOTERO_UPSERT_ITEM_ANNOTATIONS = [[
 INSERT INTO itemAnnotations(itemID, parentItemID) SELECT i.itemID, p.itemID FROM items i, items p WHERE i.key = ?1 AND p.key=?2
 ON CONFLICT DO UPDATE SET parentItemID = excluded.parentItemID;
 ]]
@@ -868,22 +878,31 @@ function API.getHeaders(api_key)
     }
 end
 
+-- Add/update attachments to itemAttachments db table
+-- Input is a table of containing itemkey and parentkey pairs
 function API.setItemAttachments(attachments)
     local db = API.openDB()
-	local stmt_insert_attachments = db:prepare(ZOTERO_INSERT_ITEM_ATTACHMENTS)
+	local stmt_upsert_attachments = db:prepare(ZOTERO_UPSERT_ITEM_ATTACHMENTS)
+	local stmt_check_collection = db:prepare(ZOTERO_GET_COLLECTION_FOR_ITEM)
 	for item, parent in pairs(attachments) do
-		stmt_insert_attachments:reset():bind(item, parent):step()
+		if stmt_check_collection:reset():bind1(1, parent):step() then
+			stmt_upsert_attachments:reset():bind(item, parent):step()
+		else  -- parentItem is not part of a collection
+		-- should delete it
+		end
 	end
-	stmt_insert_attachments:close()
+	stmt_upsert_attachments:close()
 end
 
+-- Add/update annotations to itemAnnotations db table
+-- Input is a table of containing item.key and parent.key pairs
 function API.setAnnotations(annotations)
     local db = API.openDB()
-	local stmt_insert_annotations = db:prepare(ZOTERO_INSERT_ITEM_ANNOTATIONS)
+	local stmt_upsert_annotations = db:prepare(ZOTERO_UPSERT_ITEM_ANNOTATIONS)
 	for item, parent in pairs(annotations) do
-		stmt_insert_annotations:reset():bind(item, parent):step()
+		stmt_upsert_annotations:reset():bind(item, parent):step()
 	end
-	stmt_insert_annotations:close()
+	stmt_upsert_annotations:close()
 end
 
 
@@ -951,7 +970,7 @@ function API.fetchZoteroItems(since, progress_callback)
 				if item.data.collections ~= nil then
 					local itemCol = item.data.collections[1]
 					if itemCol == nil then itemCol = '/' end
-					logger.info("Item "..key.." is part of collection "..itemCol)
+					--logger.info("Item "..key.." is part of collection "..itemCol)
 					stmt_update_collectionItems:reset():bind(itemCol, key):step()
 				end
 				
