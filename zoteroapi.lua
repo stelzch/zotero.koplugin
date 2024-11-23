@@ -375,12 +375,12 @@ WHERE
 ]]
 
 local ZOTERO_INSERT_ITEM_ATTACHMENTS = [[
-INSERT INTO itemAttachments(itemID, parentItemID) SELECT i.itemID, p.itemID FROM items i, items p WHERE i.key = ?1 AND p.key=?2;
+INSERT INTO itemAttachments(itemID, parentItemID) SELECT i.itemID, p.itemID AS pID FROM items i, items p WHERE i.key = ?1 AND p.key=?2
 ON CONFLICT DO UPDATE SET parentItemID = excluded.parentItemID;
 ]]
 
 local ZOTERO_INSERT_ITEM_ANNOTATIONS = [[
-INSERT INTO itemAnnotations(itemID, parentItemID) SELECT i.itemID, p.itemID FROM items i, items p WHERE i.key = ?1 AND p.key=?2;
+INSERT INTO itemAnnotations(itemID, parentItemID) SELECT i.itemID, p.itemID FROM items i, items p WHERE i.key = ?1 AND p.key=?2
 ON CONFLICT DO UPDATE SET parentItemID = excluded.parentItemID;
 ]]
 
@@ -984,28 +984,17 @@ function API.fetchZoteroItems(since, progress_callback)
 	if e ~= nil then return e end
 end
 
-function API.syncAllItems(progress_callback)
+-- Fetch (new) collections from Zotero server and organise them into the local sqlite database
+function API.fetchZoteroCollections(since, progress_callback)
+
     local callback = progress_callback or function() end
 
     local db = API.openDB()
-    local since = API.getLibraryVersion()
-	--logger.info("Local Zotero lib version: "..since)
-	
+    if since == nil then  since = API.getLibraryVersion() end
 	-- verify access
     local e = API.verifyZoteroAccess()
     if e ~= nil then return e end
-    
-    local err
-    if since > 0 then 
-    -- try to sync back first, so that any changes will be recorded when we update te db later on
-		if (API.access.user.write and API.access.user.notes) then
-			API.syncAnnotations()
-		else
-			err = "Zotero: API key does not have write access!"
-			logger.warn(err)
-		end
-	end
-	
+
     -- to check whether changes where made
 	local stmt_changes = db:prepare(ZOTERO_DB_CHANGES)
 	
@@ -1016,11 +1005,13 @@ function API.syncAllItems(progress_callback)
 	-- next is used to check whether table has entries. Apparently defining it as a local var makes this more efficient.
 	local next = next	
     
-    -- Sync library collections
+    -- Prepare sql commands
 	local stmt_update_collection = db:prepare(ZOTERO_DB_UPDATE_COLLECTION)
 	local stmt_delete_collection = db:prepare(ZOTERO_DB_DELETE_COLLECTION)
 	local stmt_get_collectionVersion = db:prepare(ZOTERO_GET_COLLECTION_VERSION)
+
 	local nestedCollections = {}
+	local nCnt = 0
 
     local r, e = API.fetchCollectionPaginated(collections_url, headers, function(partial_entries, percentage)
         callback(string.format("Syncing collections %.0f%%", percentage))
@@ -1050,6 +1041,7 @@ function API.syncAllItems(progress_callback)
 					-- set the proper value once all the collections are in the db
 					nestedCollections[key] = collection.parentCollection
 					collection.parentCollection = '/'
+					nCnt = nCnt + 1
 				end
 				stmt_update_collection:reset():bind(collection.name, collection.parentCollection, collection.key, collection.version):step()
 				local cnt = stmt_changes:reset():step()
@@ -1063,7 +1055,7 @@ function API.syncAllItems(progress_callback)
 	
 	-- deal with nested collections. 
 	-- Now that the db for sure has entries for all collections we can safely set parent collections
-	if next(nestedCollections) ~= nil then
+	if nCnt > 0 then
 	-- there are nestedCollections
 		local stmt_update_parentCollection = db:prepare(ZOTERO_DB_UPDATE_PARENTCOLLECTION)
 		for item, parent in pairs(nestedCollections) do
@@ -1071,9 +1063,42 @@ function API.syncAllItems(progress_callback)
 		end
 		stmt_update_parentCollection:close()
 	end
+	return r, e
+end
+
+-- Sync local db with zotero server
+-- This includes:
+-- 1. uploading local annotations
+-- 2. downloading collections and organising them into local database structure
+-- 3. same for items
+-- 4. downloading attachments for marked collections
+function API.syncAllItems(progress_callback)
+    local callback = progress_callback or function() end
+
+    local db = API.openDB()
+    local since = API.getLibraryVersion()
+	--logger.info("Local Zotero lib version: "..since)
+	
+	-- verify access
+    local e = API.verifyZoteroAccess()
+    if e ~= nil then return e end
+    
+    local err
+    if since > 0 then 
+    -- try to sync back first, so that any changes will be recorded when we update the db later on
+		if (API.access.user.write and API.access.user.notes) then
+			API.syncAnnotations()
+		else
+			err = "Zotero: API key does not have write access!"
+			logger.warn(err)
+		end
+	end
+	
+	local r, e = API.fetchZoteroCollections(since, progress_callback)
     if e ~= nil then return e end
 		
-	API.fetchZoteroItems(since, callback)
+	e = API.fetchZoteroItems(since, callback)
+    if e ~= nil then return e end
 	
     API.setLibraryVersion(r)
 	
