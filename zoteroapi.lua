@@ -403,11 +403,17 @@ local ZOTERO_SET_ATTACHMENT_SYNCEDVERSION_KEY = [[
 UPDATE itemAttachments SET syncedVersion = ?2 WHERE itemID IN (SELECT itemID FROM items WHERE key = ?1);
 ]]
 
--- Return key and filenames for all locally synced attachments. 
+-- set lastSync to now for attachment with key specified by parameter 
+local ZOTERO_SET_ATTACHMENT_LASTSYNC = [[ 
+UPDATE itemAttachments SET lastSync = unixepoch('now') WHERE itemID IN (SELECT itemID FROM items WHERE key = ?);
+]]
+
+-- Return key, filename and lastSync for all locally synced attachments. 
 local ZOTERO_GET_LOCAL_ATTACHMENT = [[ 
 SELECT
 	key,
-	jsonb_extract(value, '$.data.filename')
+	jsonb_extract(value, '$.data.filename'),
+	lastSync
 FROM (itemAttachments INNER JOIN itemData ON itemData.itemID = itemAttachments.itemID) INNER JOIN items ON itemData.itemID = items.itemID 
 WHERE itemAttachments.syncedVersion > 0;
 ]]
@@ -1224,7 +1230,7 @@ function API.downloadAndGetPath(key, download_callback)
 			logger.dbg("Up-to-date local file. No need for download.")
 			downloadRequired = false
 		end	
-	else -- file does not exist, so at least make sure the folder is there...
+	else -- file does not exist, so make sure the folder is there...
 	    lfs.mkdir(targetDir)
 	end
 	
@@ -1469,14 +1475,31 @@ function API.syncAnnotations(progress_callback)
     local files, item_count = stmt:resultset()
     logger.info("Checking for new local annotations on "..item_count.." pdf files.")
     stmt:close()
-
+	local stmt_ts = db:prepare(ZOTERO_SET_ATTACHMENT_LASTSYNC)
+	
     for i = 1, item_count do
         local key = files[1][i]
         local filename = files[2][i]
-        local file_path = API.storage_dir .. "/" .. key .. "/" .. filename
+        local db_ts = tonumber(files[3][i])
         
-        Annotations.createAnnotations(file_path, key, API.createItems)
-
+        local file_path = API.storage_dir .. "/" .. key .. "/" .. filename
+        -- Check time of last modification
+        -- TO DO
+		--local targetDir, targetPath = API.getDirAndPath(item)
+		local sidecarFile = DocSettings:findSidecarFile (file_path, no_legacy)
+		if sidecarFile then	-- only can have local annotations if sidecar file exists...
+			local file_ts = lfs.attributes(sidecarFile, "modification")
+			--print(file_ts, db_ts, file_ts > db_ts)
+			-- Compare to last sync recorded in db
+			if file_ts > db_ts then	-- sidecar files has been modified since last sync
+				Annotations.createAnnotations(file_path, key, API.createItems)
+				stmt_ts:reset():bind1(1, key):step()
+ 			end
+		else
+			-- TO-DO:
+			-- Should check if local attachment still exists and update db if need be...
+		end
+				
         if progress_callback ~= nil and (i == 1 or i % 10 == 0 or i == item_count) then
             progress_callback(string.format(_("Syncing annotations of file %i/%i"), i, item_count))
         end
