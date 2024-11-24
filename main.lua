@@ -317,7 +317,7 @@ function Plugin:addToMainMenu(menu_items)
                     {
                         text = _("Re-analyse local items"),
                         callback = function()
-                            ZoteroAPI.checkItemData()
+                            self:onZoteroReanalyseAction()
                         end,
                     },
                     {
@@ -547,6 +547,27 @@ function Plugin:onZoteroSyncAction()
     Trapper:wrap(function()
         Trapper:info("Synchronizing Zotero library.")
         local e = ZoteroAPI.syncAllItems(function(msg)
+            Trapper:info(msg)
+        end)
+
+
+        if e == nil then
+            Trapper:info("Success")
+        else
+            Trapper:info(e)
+        end
+
+    end)
+end
+
+function Plugin:onZoteroReanalyseAction()
+    if not self:checkInitialized() then
+        return
+    end
+    local Trapper = require("frontend/ui/trapper")
+    Trapper:wrap(function()
+        Trapper:info("Synchronizing Zotero library.")
+        local e = ZoteroAPI.checkItemData(function(msg)
             Trapper:info(msg)
         end)
 

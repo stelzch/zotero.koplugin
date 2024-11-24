@@ -1125,10 +1125,14 @@ end
 
 ---------------------
 -- Check (local) library items
-function API.checkItemData()
+function API.checkItemData(progressCallBack)
     
     local db = API.openDB()
 
+	local stats0 = API.getStats()
+	local total = stats0.items
+	local dStep = math.max(math.floor(total/100), 10)
+	
     local stmt = db:prepare([[SELECT json(value) FROM 
     		itemData INNER JOIN items ON itemData.itemID = items.itemID]])
 
@@ -1147,6 +1151,7 @@ function API.checkItemData()
 	db:exec("DELETE FROM itemAttachments;")
     local row = stmt:reset():step()
     local item
+    local cnt = 0
     while row ~= nil do
 		item = JSON.decode(row[1])
 		
@@ -1169,7 +1174,10 @@ function API.checkItemData()
 				and table_contains(annotationTypes, item.data.annotationType)) then
 			annotations[item.key] = item.data.parentItem
 		end
-
+		cnt = cnt + 1
+		if progressCallBack and (cnt % dStep == 0) then
+			progressCallBack(string.format("Re-analyzing items: %.0f%%", cnt/total))
+		end
         row = stmt:step(row)
     end
     stmt:close()
