@@ -31,6 +31,45 @@ This addon for [KOReader](https://github.com/koreader/koreader) allows you to vi
 6. Set your credentials for Zotero either directly in KOReader or edit the configuration file as described [below](#manual-configuration).
 
 
+
+## Usage
+
+This plugin adds a 'Zotero' item to the search menu ('Top Menu -> Search (magnifying glass) -> Zotero').
+
+
+### Browse
+
+Use this to navigate your Zotero collection. Note that only items that have at least one supported attachment will be shown in the browser.
+Collections will be shown first, followed by items in the selected sub-collection (currently in alphabetical order).
+Items without a collection will be shown in the top level.
+
+Tapping will open a sub-collection or trying to open one of the attachments associated with the item.
+If it is not yet available locally it will *download* it from the zotero server.
+ 
+You can also long-press on items. The action depends on what type of item is selected:
+	- Collection: Show a dialog which allows you to set this collection as an offline collection. 
+	- Item: Show a list of *all* (supported) attachments of this item
+	
+### Synchronize
+
+### Maintenance
+
+- Re-analyze local items will go through all the items in the local database and re-check which ones have supported attachments, are attachemnts themselves or are relevant annotations. Depending on your collection size this can take quite some time, but is still much faster then a full re-sync and does not need any internet connection.
+
+- Resync entire collection: only meant as a last resort as this will delete the complete local database and resynchronize everything from the zotero server.
+
+### Settings
+
+- Configure Zotero account: This needs to be configured before you can synchronise your Zotero library. Enter UserID (8 digit number) and the API key here.
+
+- Webdav settings: If you are using webdav use the 3 corresponding menu items to set the credentials, test them and enable support. 
+
+
+
+## About/Info
+
+Displays version info for this plugin and some basic stats about your local zotero library.
+
 ## Configuration
 
 ### WebDAV support
@@ -52,3 +91,10 @@ return {
     ["webdav_password"] = "",
 }
 ```
+### Misc
+
+In it's default configuration KOReader seems to open a dialog asking whether to write annotations into the pdf file. 
+Do *not* write annotation to the file.
+It probably is most convenient by disabling this dialog by going to
+'Top Menu -> Settings (cogwheel) -> Document -> Save document (write highlights into PDF)' and ticking 'Disable'
+

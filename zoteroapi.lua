@@ -961,12 +961,17 @@ function API.fetchZoteroItems(since, progress_callback)
 				stmt_update_item:reset():bind(1, item.data.itemType, key, item.version):step()
 				stmt_update_itemData:reset():bind(key, JSON.encode(item)):step()
 				
-				-- Set the correct collection for the new item:
+				-- Set the correct collection(s) for this item:
 				if item.data.collections ~= nil then
-					local itemCol = item.data.collections[1]
-					if itemCol == nil then itemCol = '/' end
-					--logger.info("Item "..key.." is part of collection "..itemCol)
-					stmt_update_collectionItems:reset():bind(itemCol, key):step()
+					--if #item.data.collections > 1 then print("Item "..item.key.." is in ", #item.data.collections , " collections: ") end
+					if item.data.collections[1] == nil then -- no collection specified: put in root directory
+						stmt_update_collectionItems:reset():bind('/', item.key):step()
+					else  -- some items might be in more than one collection, so loop over collections
+						for i, coll in pairs(item.data.collections) do
+							-- This works, but maybe better check if collection exists first? Then could delete item if collection no longer there...
+							stmt_update_collectionItems:reset():bind(coll, item.key):step()
+						end
+					end
 				end
 				
 				-- Check if it is a (supported) attachment or annotation
@@ -1130,8 +1135,8 @@ function API.checkItemData(progressCallBack)
     local db = API.openDB()
 
 	local stats0 = API.getStats()
-	local total = stats0.items
-	local dStep = math.max(math.floor(total/100), 10)
+	local frac = 100/stats0.items
+	local dStep = math.max(math.floor(stats0.items/100), 10)
 	
     local stmt = db:prepare([[SELECT json(value) FROM 
     		itemData INNER JOIN items ON itemData.itemID = items.itemID]])
@@ -1155,14 +1160,17 @@ function API.checkItemData(progressCallBack)
     while row ~= nil do
 		item = JSON.decode(row[1])
 		
-		-- Set the correct collection for the new item:
+		-- Set the correct collection(s) for this item:
 		if item.data.collections ~= nil then
-			--print("Item in collections: "..unpack(item.data.collections))
-			local itemCol = item.data.collections[1]
-			if itemCol == nil then itemCol = '/' end
-			--logger.info("Item "..item.key.." is part of collection "..itemCol)
-			-- This works, but maybe better check if collection exists first? Then could delete item if collection no longer there...
-			stmt_update_collectionItems:reset():bind(itemCol, item.key):step()
+			--if #item.data.collections > 1 then print("Item "..item.key.." is in ", #item.data.collections , " collections: ") end
+			if item.data.collections[1] == nil then -- no collection specified: put in root directory
+				stmt_update_collectionItems:reset():bind('/', item.key):step()
+			else  -- some items might be in more than one collection, so loop over collections
+				for i, coll in pairs(item.data.collections) do
+					-- This works, but maybe better check if collection exists first? Then could delete item if collection no longer there...
+					stmt_update_collectionItems:reset():bind(coll, item.key):step()
+				end
+			end
 		end
 
 		-- Check if it is a (supported) attachment or annotation
@@ -1176,12 +1184,18 @@ function API.checkItemData(progressCallBack)
 		end
 		cnt = cnt + 1
 		if progressCallBack and (cnt % dStep == 0) then
-			progressCallBack(string.format("Re-analyzing items: %.0f%%", cnt/total))
+			progressCallBack(string.format("Re-analysing items: %.0f%%", cnt*frac))
 		end
         row = stmt:step(row)
     end
     stmt:close()
+	if progressCallBack then
+		progressCallBack(string.format("Cataloguing attachments"))
+	end
 	API.setItemAttachments(attachments)
+	if progressCallBack then
+		progressCallBack(string.format("Cataloguing annotations"))
+	end
 	API.setAnnotations(annotations)
 end
     

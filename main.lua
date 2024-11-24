@@ -22,6 +22,8 @@ local logger = require("logger")
 
 local DEFAULT_LINES_PER_PAGE = 14
 
+local init_done = false
+
 local table_empty = function(table)
     -- see https://stackoverflow.com/a/1252776
     local next = next
@@ -131,7 +133,10 @@ function ZoteroBrowser:onMenuSelect(item)
                 UIManager:show(b)
                 return
             else
-                self:openAttachment(attachments[1].key)
+				-- open the *last* attachment associated with the item.
+				-- For all the items I've tested this is the one that 
+				-- Zotero desktop defaults to, but this might be fluke...
+                self:openAttachment(attachments[#attachments].key)
             end
         end)
         UIManager:show(self.download_dialog)
@@ -225,10 +230,10 @@ local Plugin = WidgetContainer:new{
 }
 
 function Plugin:onDispatcherRegisterActions()
-    Dispatcher:registerAction("zotero_open_action", {
+    Dispatcher:registerAction("zotero_browser_action", {
         category="none",
-        event="ZoteroOpenAction",
-        title=_("Zotero Open"),
+        event="ZoteroBrowserAction",
+        title=_("Zotero Collection Browser"),
         general=true,
     })
     Dispatcher:registerAction("zotero_sync_action", {
@@ -298,7 +303,7 @@ function Plugin:addToMainMenu(menu_items)
             {
                 text = _("Browse"),
                 callback = function()
-                    self:onZoteroOpenAction()
+                    self:onZoteroBrowserAction()
                 end,
             },
             {
@@ -317,7 +322,7 @@ function Plugin:addToMainMenu(menu_items)
                     {
                         text = _("Re-analyse local items"),
                         callback = function()
-                            self:onZoteroReanalyseAction()
+                            self:onZoteroReanalyzeAction()
                         end,
                     },
                     {
@@ -526,7 +531,7 @@ function Plugin:getItemsPerPage()
     return ZoteroAPI.getSettings():readSetting("items_per_page", DEFAULT_LINES_PER_PAGE)
 end
 
-function Plugin:onZoteroOpenAction()
+function Plugin:onZoteroBrowserAction()
     if not self:checkInitialized() then
         return
     end
@@ -560,7 +565,7 @@ function Plugin:onZoteroSyncAction()
     end)
 end
 
-function Plugin:onZoteroReanalyseAction()
+function Plugin:onZoteroReanalyzeAction()
     if not self:checkInitialized() then
         return
     end
