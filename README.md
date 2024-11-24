@@ -19,7 +19,7 @@ This addon for [KOReader](https://github.com/koreader/koreader) allows you to vi
 ### Limitations
 
 * Currently, this plugin _only supports uploading new annotations_ made with KOReader to Zotero. Changes and deletions made in KOReader will not be synchronized. But changes made in Zotero will be synchronised.
-* Annotations only work for pdf files, not epub or other
+* Annotations only work for pdf files, not epub or other formats
 * Search function currently quite limited, no real access to full author lists, DOIs, tags, etc.
 
 
@@ -35,7 +35,8 @@ This addon for [KOReader](https://github.com/koreader/koreader) allows you to vi
 ## Usage
 
 This plugin adds a 'Zotero' item to the search menu ('Top Menu -> Search (magnifying glass) -> Zotero').
-
+It keeps most of your Zotero library information on your device and apart from "Synchronize" tries to avoid interacting with the Zotero server.
+The only exception is when trying to open an attachment which is not yet available locally: in this case it will automatically try to download the item.
 
 ### Browse
 
@@ -43,18 +44,33 @@ Use this to navigate your Zotero collection. Note that only items that have at l
 Collections will be shown first, followed by items in the selected sub-collection (currently in alphabetical order).
 Items without a collection will be shown in the top level.
 
-Tapping will open a sub-collection or trying to open one of the attachments associated with the item.
-If it is not yet available locally it will *download* it from the zotero server.
+**Tapping** will open a sub-collection or try to open one of the attachments associated with the item.
+If it is not yet available locally (or out of date) it will **download** it from the zotero server.
  
-You can also long-press on items. The action depends on what type of item is selected:
-	- Collection: Show a dialog which allows you to set this collection as an offline collection. 
-	- Item: Show a list of *all* (supported) attachments of this item
-	
+You can also **long-press** on items. The action depends on what type of item is selected:
+- Collection: Show a dialog which allows you to set this collection as an offline collection. 
+- Item: Show a list of *all* (supported) attachments of this item
+
+You can **search** the databse by clicking on the magnifying glass icon in the top left corner. 
+
+**Note:** you can associate this 'Browse' action with a gesture by going to
+'Top Menu -> Settings (cogwheel) -> Taps and gestures -> Gesture manager'
+Select the gesture you want to use, then navigate to 'General -> Zotero Collection Browser'
+
 ### Synchronize
+
+The initial synchronization will **download** the complete metadata for your collection from the Zotero server. Depending on the size of your collection this can take quite some time (e.g. for my library about 1 minute per 1000 items).
+All subsequent sync's should be much faster, as it will only download changes since the last sync.
+
+In detail 'synchronize' entails
+1. **Uploading** new annotations to the Zotero server
+2. **Downloading** collection information
+3. **Downloading** library items and cataloguing them
+4. **Downloading** all attachments in collections marked as 'offline collections'
 
 ### Maintenance
 
-- Re-analyze local items will go through all the items in the local database and re-check which ones have supported attachments, are attachemnts themselves or are relevant annotations. Depending on your collection size this can take quite some time, but is still much faster then a full re-sync and does not need any internet connection.
+- Re-analyze local items will go through all the items in the local database and re-check which ones have supported attachments, are attachments themselves or are relevant annotations. Depending on your collection size this can take quite some time, but is still much faster then a full re-sync and does not need any internet connection.
 
 - Resync entire collection: only meant as a last resort as this will delete the complete local database and resynchronize everything from the zotero server.
 
@@ -65,11 +81,11 @@ You can also long-press on items. The action depends on what type of item is sel
 - Webdav settings: If you are using webdav use the 3 corresponding menu items to set the credentials, test them and enable support. 
 
 
-
-## About/Info
+### About/Info
 
 Displays version info for this plugin and some basic stats about your local zotero library.
 
+---
 ## Configuration
 
 ### WebDAV support
