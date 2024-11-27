@@ -15,10 +15,14 @@ local Geom = require("ui/geometry")
 local _ = require("gettext")
 local ZoteroAPI = require("zoteroapi")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
+local ButtonDialog = require("ui/widget/buttondialog")
 local lfs = require("libs/libkoreader-lfs")
+local logger = require("logger")
 
 
 local DEFAULT_LINES_PER_PAGE = 14
+
+local init_done = false
 
 local table_empty = function(table)
     -- see https://stackoverflow.com/a/1252776
@@ -50,7 +54,7 @@ function ZoteroBrowser:onLeftButtonTap()
         title = _("Search Zotero titles"),
         input = "",
         input_hint = "search query",
-        description = _("This will search title, first author and DOI of all entries."),
+        description = _("This will search title and first author of all entries."),
         buttons = {
             {
                 {
@@ -87,49 +91,99 @@ function ZoteroBrowser:onReturn()
 end
 
 
+function ZoteroBrowser:openAttachment(key)
+    local full_path, e = ZoteroAPI.downloadAndGetPath(key)
+    if e ~= nil or full_path == nil then
+        local b = InfoMessage:new{
+            text = _("Could not open file.") .. e,
+            timeout = 5,
+            icon = "notice-warning"
+        }
+        UIManager:show(b)
+    else
+        assert(full_path ~= nil)
+        UIManager:close(self.download_dialog)
+        local ReaderUI = require("apps/reader/readerui")
+        self.close_callback()
+        ReaderUI:showReader(full_path)
+    end
+end
+
 function ZoteroBrowser:onMenuSelect(item)
-    if item.collection ~= nil then
+    if item.type == "collection" then
         table.insert(self.paths, item.key)
         self:displayCollection(item.key)
-    elseif item.wildcard_collection ~= nil then
+    elseif item.type == "wildcard_collection"  then
         table.insert(self.paths, "root")
         self:displaySearchResults("")
-    elseif item.is_label ~= nil then
-        -- nop
-    else
+    elseif item.type == "item" then
         self.download_dialog = InfoMessage:new{
             text = _("Downloading file"),
             timeout = 5,
             icon = "notice-info",
         }
         UIManager:scheduleIn(0.05, function()
-            local full_path, e = ZoteroAPI.downloadAndGetPath(item.key)
-            if e ~= nil then
+            local attachments = ZoteroAPI.getItemAttachments(item.key)
+            if attachments == nil or table_empty(attachments)  then
                 local b = InfoMessage:new{
-                    text = _("Could not open file.") .. e,
+                    text = _("The selected entry does not have any attachments."),
                     timeout = 5,
                     icon = "notice-warning"
                 }
                 UIManager:show(b)
+                return
             else
-                UIManager:close(self.download_dialog)
-                local ReaderUI = require("apps/reader/readerui")
-                self.close_callback()
-                ReaderUI:showReader(full_path)
+				-- open the *last* attachment associated with the item.
+				-- For all the items I've tested this is the one that 
+				-- Zotero desktop defaults to, but this might be fluke...
+                self:openAttachment(attachments[#attachments].key)
             end
         end)
         UIManager:show(self.download_dialog)
+    elseif item.type == "attachment" then
+        self:openAttachment(item.key)
+    elseif item.type == "label" then
+        -- nop
+    end
+end
+
+function ZoteroBrowser:onMenuHold(item)
+    if item.type == "item" then
+        table.insert(self.paths, item.key)
+        self:displayAttachments(item.key)
+    elseif item.type == "collection" then
+        local is_offline_enabled = ZoteroAPI.isOfflineCollection(item.key)
+        local button_label = "▢  Download this collection during sync"
+        if is_offline_enabled then
+            button_label = "✓ Download this collection during sync"
+        end
+        local collection_dialog
+        collection_dialog = ButtonDialog:new{
+            title = item.text,
+            buttons = {
+                {
+                {
+                    text = button_label,
+                    callback = function()
+                        if is_offline_enabled then
+                            ZoteroAPI.removeOfflineCollection(item.key)
+                        else
+                            ZoteroAPI.addOfflineCollection(item.key)
+                        end
+                        UIManager:close(collection_dialog)
+                    end
+
+                }
+            }
+            }
+        }
+        UIManager:show(collection_dialog)
     end
 end
 
 function ZoteroBrowser:displaySearchResults(query)
     local items = ZoteroAPI.displaySearchResults(query)
-    if table_empty(items) then
-        table.insert(items, 1, {
-            ["text"] = _("No Results"),
-            ["is_label"] = true,
-        })
-    end
+    items = self:addEmptyLabelIfApplicable(items)
     self:setItems(items)
 end
 
@@ -139,18 +193,31 @@ function ZoteroBrowser:displayCollection(collection_id)
     if collection_id == nil then
         table.insert(items, 1, {
             ["text"] = _("All Items"),
-            ["wildcard_collection"] = true
+            ["type"] = "wildcard_collection"
         })
     end
+    items = self:addEmptyLabelIfApplicable(items)
 
+
+    self:setItems(items)
+end
+
+function ZoteroBrowser:addEmptyLabelIfApplicable(items)
     if table_empty(items) then
         table.insert(items, 1, {
             ["text"] = _("No Items"),
-            ["is_label"] = true,
+            ["type"] = "label",
         })
     end
 
-    self:setItems(items)
+    return items
+end
+
+function ZoteroBrowser:displayAttachments(key)
+    local attachments = ZoteroAPI.getItemAttachments(key) or {}
+    attachments = self:addEmptyLabelIfApplicable(attachments)
+
+    self:setItems(attachments)
 end
 
 function ZoteroBrowser:setItems(items)
@@ -163,10 +230,10 @@ local Plugin = WidgetContainer:new{
 }
 
 function Plugin:onDispatcherRegisterActions()
-    Dispatcher:registerAction("zotero_open_action", {
+    Dispatcher:registerAction("zotero_browser_action", {
         category="none",
-        event="ZoteroOpenAction",
-        title=_("Zotero Open"),
+        event="ZoteroBrowserAction",
+        title=_("Zotero Collection Browser"),
         general=true,
     })
     Dispatcher:registerAction("zotero_sync_action", {
@@ -183,11 +250,12 @@ function Plugin:init()
     self.ui.menu:registerToMainMenu(self)
     xpcall(self.initAPIAndBrowser, self.initError, self)
     self.initialized = true
-    print("Z: successfully initialized!")
+
+    logger.dbg("Zotero: successfully initialized!")
 end
 
 function Plugin:initError(e)
-    print("Could not initialize Zotero: " .. e)
+    logger.err("Could not initialize Zotero: " .. e)
 end
 
 function Plugin:checkInitialized()
@@ -224,7 +292,7 @@ function Plugin:initAPIAndBrowser()
         self.browser
     }
     self.browser.show_parent = self.zotero_dialog
-    print("Z: Browser initialized")
+    logger.dbg("Zotero: Browser initialized")
 end
 
 function Plugin:addToMainMenu(menu_items)
@@ -235,7 +303,7 @@ function Plugin:addToMainMenu(menu_items)
             {
                 text = _("Browse"),
                 callback = function()
-                    self:onZoteroOpenAction()
+                    self:onZoteroBrowserAction()
                 end,
             },
             {
@@ -251,6 +319,12 @@ function Plugin:addToMainMenu(menu_items)
                     return nil
                 end,
                 sub_item_table = {
+                    {
+                        text = _("Re-analyse local items"),
+                        callback = function()
+                            self:onZoteroReanalyzeAction()
+                        end,
+                    },
                     {
                         text = _("Resync entire collection"),
                         callback = function()
@@ -309,10 +383,29 @@ function Plugin:addToMainMenu(menu_items)
                         callback = function()
                             self:setItemsPerPage()
                         end,
-
                     },
                 }
-            }
+            },
+            {
+                text = _("About/Info"),
+                callback = function()
+					local version = ZoteroAPI.version
+					local stats = ZoteroAPI.getStats()
+					UIManager:show(InfoMessage:new{
+						text = _("Plugin version: \n"..version..
+						"\n\nLibrary stats:\n\tVersion:\t\t\t"..stats.libVersion..
+						"\n\tCollections:\t\t"..stats.collections..
+						'\n\tTotal items:\t\t'..stats.items..
+						"\n\tAttachments:\t"..stats.attachments..
+						"\n\tAnnotations:\t"..stats.annotations.."\n"),
+						--timeout = 10,
+						--icon = "notice"
+						show_icon = false,
+					})
+
+                    return nil
+                end,
+			}
         },
     }
 end
@@ -416,7 +509,6 @@ end
 
 function Plugin:setItemsPerPage()
     assert(ZoteroAPI.getSettings ~= nil)
-	print("setting to " .. self:getItemsPerPage())
     self.items_per_page_dialog = SpinWidget:new {
         title_text = _("Set items per page"),
         value = self:getItemsPerPage(),
@@ -439,7 +531,7 @@ function Plugin:getItemsPerPage()
     return ZoteroAPI.getSettings():readSetting("items_per_page", DEFAULT_LINES_PER_PAGE)
 end
 
-function Plugin:onZoteroOpenAction()
+function Plugin:onZoteroBrowserAction()
     if not self:checkInitialized() then
         return
     end
@@ -456,30 +548,42 @@ function Plugin:onZoteroSyncAction()
     if not self:checkInitialized() then
         return
     end
-    UIManager:scheduleIn(1, function()
-        local e = ZoteroAPI.syncAllItems()
+    local Trapper = require("frontend/ui/trapper")
+    Trapper:wrap(function()
+        Trapper:info("Synchronizing Zotero library.")
+        local e = ZoteroAPI.syncAllItems(function(msg)
+            Trapper:info(msg)
+        end)
+
 
         if e == nil then
-            UIManager:show(InfoMessage:new{
-                text = _("Success."),
-                timeout = 3,
-                icon = "check"
-            })
+            Trapper:info("Success")
         else
-            UIManager:show(InfoMessage:new{
-                text = e,
-                timeout = 3,
-                icon = "notice-warning"
-            })
+            Trapper:info(e)
         end
+
     end)
+end
 
-    UIManager:show(InfoMessage:new{
-        text = _("Synchronizing Zotero library. This might take some time."),
-        timeout = 3,
-        icon = "notice-info"
-    })
+function Plugin:onZoteroReanalyzeAction()
+    if not self:checkInitialized() then
+        return
+    end
+    local Trapper = require("frontend/ui/trapper")
+    Trapper:wrap(function()
+        Trapper:info("Synchronizing Zotero library.")
+        local e = ZoteroAPI.checkItemData(function(msg)
+            Trapper:info(msg)
+        end)
 
+
+        if e == nil then
+            Trapper:info("Success")
+        else
+            Trapper:info(e)
+        end
+
+    end)
 end
 
 return Plugin
