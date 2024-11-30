@@ -214,6 +214,10 @@ local ZOTERO_DB_INIT_COLLECTIONS = [[
 INSERT INTO collections(collectionName, libraryID, key) SELECT '',1,'/' WHERE NOT EXISTS(SELECT collectionID FROM collections);
 ]]
 
+local ZOTERO_CREATE_ITEMKEY_INDEX = [[
+CREATE INDEX IF NOT EXISTS idx_itemkey ON items(key);
+]]
+
 local ZOTERO_DB_UPDATE_ITEM = [[
 INSERT INTO items(itemTypeID, libraryID, key, version) SELECT itemTypeID, ?1, ?3, ?4 FROM itemTypes WHERE typeName IS ?2 
 ON CONFLICT DO UPDATE SET itemTypeID = excluded.itemTypeID, version = excluded.version;
@@ -534,6 +538,8 @@ function API.openDB()
 			end
 			logger.info("Zotero: Set up root collection.")
 			API.db:exec(ZOTERO_DB_INIT_COLLECTIONS)
+			-- Create index for item keys
+			API.db:exec(ZOTERO_CREATE_ITEMKEY_INDEX)
 		else
 			logger.info("Zotero: Local db version: "..API.libVersion)
 		end
