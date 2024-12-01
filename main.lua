@@ -183,7 +183,7 @@ end
 
 function ZoteroBrowser:displaySearchResults(query)
     local items = ZoteroAPI.displaySearchResults(query)
-    items = self:addEmptyLabelIfApplicable(items)
+    items = self:addLabelIfEmpty(items, "No search results!")
     self:setItems(items)
 end
 
@@ -196,16 +196,17 @@ function ZoteroBrowser:displayCollection(collection_id)
             ["type"] = "wildcard_collection"
         })
     end
-    items = self:addEmptyLabelIfApplicable(items)
+    items = self:addLabelIfEmpty(items)
 
 
     self:setItems(items)
 end
 
-function ZoteroBrowser:addEmptyLabelIfApplicable(items)
+function ZoteroBrowser:addLabelIfEmpty(items, msg)
     if table_empty(items) then
+		if msg == nil then msg = "No Items" end
         table.insert(items, 1, {
-            ["text"] = _("No Items"),
+            ["text"] = _(msg),
             ["type"] = "label",
         })
     end
@@ -215,7 +216,7 @@ end
 
 function ZoteroBrowser:displayAttachments(key)
     local attachments = ZoteroAPI.getItemAttachments(key) or {}
-    attachments = self:addEmptyLabelIfApplicable(attachments)
+    attachments = self:addLabelIfEmpty(attachments)
 
     self:setItems(attachments)
 end
