@@ -245,13 +245,19 @@ function Plugin:onDispatcherRegisterActions()
 end
 
 function Plugin:init()
-    self.initialized = false
-    self:onDispatcherRegisterActions()
-    self.ui.menu:registerToMainMenu(self)
-    xpcall(self.initAPIAndBrowser, self.initError, self)
-    self.initialized = true
+	-- not sure when this is called, so I don't understand why some bits need to be 
+	-- re-initialised every time. 
+	-- But at least the ZoteroAPI only needs to be initialised once
+	self:onDispatcherRegisterActions()
+	self.ui.menu:registerToMainMenu(self)
+    if not init_done then
+		xpcall(self.initAPI, self.initError, self)
+		init_done = true
+	end
+	xpcall(self.initBrowser, self.initError, self)	
+	self.initialized = init_done
 
-    logger.dbg("Zotero: successfully initialized!")
+	logger.dbg("Zotero: successfully initialized!")
 end
 
 function Plugin:initError(e)
@@ -270,10 +276,13 @@ function Plugin:checkInitialized()
     return self.initialized
 end
 
-function Plugin:initAPIAndBrowser()
+function Plugin:initAPI()
     self.zotero_dir_path = DataStorage:getDataDir() .. "/zotero"
     lfs.mkdir(self.zotero_dir_path)
     ZoteroAPI.init(self.zotero_dir_path)
+end
+
+function Plugin:initBrowser()
     self.small_font_face = Font:getFace("smallffont")
     self.browser = ZoteroBrowser:new{
         refresh_callback = function()
