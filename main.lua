@@ -191,14 +191,17 @@ function ZoteroBrowser:displayCollection(collection_id)
     local items = ZoteroAPI.displayCollection(collection_id)
 
     if collection_id == nil then
-        table.insert(items, 1, {
-            ["text"] = _("All Items"),
-            ["type"] = "wildcard_collection"
-        })
-    end
-    items = self:addLabelIfEmpty(items)
-
-
+		if table_empty(items) then
+			items = self:addLabelIfEmpty(items, "Library is empty! Synchronise first...")
+		else
+			table.insert(items, 1, {
+				["text"] = _("All Items"),
+				["type"] = "wildcard_collection"
+			})
+		end
+	else
+	    items = self:addLabelIfEmpty(items)
+	end
     self:setItems(items)
 end
 
