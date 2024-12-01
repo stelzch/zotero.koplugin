@@ -579,9 +579,7 @@ function API.init(zotero_dir)
     local path = debug.getinfo(1, "S").source:sub(2)
 	local ts = lfs.attributes(path, "modification")
 	API.version = API.version.." ("..os.date("%Y-%m-%d %X",ts)..")" 
-	logger.info("Zotero version: "..API.version)
-
-	--API.checkItemData()
+	logger.info("Zotero plugin version: "..API.version)
 end
 
 function API.getStats()
@@ -593,7 +591,7 @@ function API.getStats()
 	local a = tonumber(db:rowexec("SELECT COUNT(*) FROM itemAttachments;"))
 	local n = tonumber(db:rowexec("SELECT COUNT(*) FROM itemAnnotations;"))
 	local stats = { ["libVersion"] = API.getLibraryVersion(), ["collections"] = c, ["items"] = i, ["attachments"] = a, ["annotations"] = n }
-	logger.info(JSON.encode(stats))
+	--logger.info(JSON.encode(stats))
 	
     return stats
 end
