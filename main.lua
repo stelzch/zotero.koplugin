@@ -34,6 +34,9 @@ local ZoteroBrowser = Menu:extend{
     no_title = false,
     is_borderless = true,
     is_popout = false,
+    show_path = true,
+--    subtitle = "test path",
+    title_bar_fm_style = true,
     parent = nil,
     title_bar_left_icon = "appbar.search",
     covers_full_screen = true,
@@ -44,11 +47,13 @@ local ZoteroBrowser = Menu:extend{
 function ZoteroBrowser:init()
     Menu.init(self)
     self.paths = {}
+    self.keys = {}
 end
 
 -- Show search input
 function ZoteroBrowser:onLeftButtonTap()
     table.insert(self.paths, "search")
+    table.insert(self.keys, "search")
     local search_query_dialog
     search_query_dialog = InputDialog:new{
         title = _("Search Zotero titles"),
@@ -81,11 +86,12 @@ end
 
 
 function ZoteroBrowser:onReturn()
-    table.remove(self.paths, #self.paths)
-    if #self.paths == 0 then
+	table.remove(self.paths, #self.paths)
+    local dir = table.remove(self.keys, #self.keys)
+    if #self.keys == 0 then
         self:displayCollection(nil)
     else
-        self:displayCollection(self.paths[#self.paths])
+        self:displayCollection(self.keys[#self.keys])
     end
     return true
 end
@@ -111,10 +117,12 @@ end
 
 function ZoteroBrowser:onMenuSelect(item)
     if item.type == "collection" then
-        table.insert(self.paths, item.key)
+        table.insert(self.paths, item.text)
+        table.insert(self.keys, item.key)
         self:displayCollection(item.key)
     elseif item.type == "wildcard_collection"  then
-        table.insert(self.paths, "root")
+        table.insert(self.paths, "All items")
+        table.insert(self.keys, "all")
         self:displaySearchResults("")
     elseif item.type == "item" then
         self.download_dialog = InfoMessage:new{
@@ -150,6 +158,7 @@ end
 function ZoteroBrowser:onMenuHold(item)
     if item.type == "item" then
         table.insert(self.paths, item.key)
+        table.insert(self.keys, item.key)
         self:displayAttachments(item.key)
     elseif item.type == "collection" then
         local is_offline_enabled = ZoteroAPI.isOfflineCollection(item.key)
@@ -224,8 +233,21 @@ function ZoteroBrowser:displayAttachments(key)
     self:setItems(attachments)
 end
 
-function ZoteroBrowser:setItems(items)
-    self:switchItemTable("Zotero", items)
+function ZoteroBrowser:zPath()
+	local path = "HOME"
+	if #self.paths > 0 then
+		if self.paths[#self.paths] == "search" then
+			path = "Search results"
+		else
+			path = "/"..table.concat(self.paths, "")
+		end	
+	end
+	return path
+end
+
+function ZoteroBrowser:setItems(items, subtitle)
+	local subtitle = self:zPath()
+    self:switchItemTable("Zotero Browser", items, nil, nil, subtitle)
 end
 
 local Plugin = WidgetContainer:new{
