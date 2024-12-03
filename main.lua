@@ -52,8 +52,6 @@ end
 
 -- Show search input
 function ZoteroBrowser:onLeftButtonTap()
-    table.insert(self.paths, "search")
-    table.insert(self.keys, "search")
     local search_query_dialog
     search_query_dialog = InputDialog:new{
         title = _("Search Zotero titles"),
@@ -192,6 +190,8 @@ end
 
 function ZoteroBrowser:displaySearchResults(query)
     local items = ZoteroAPI.displaySearchResults(query)
+	table.insert(self.paths, query)
+    table.insert(self.keys, "search")
     items = self:addLabelIfEmpty(items, "No search results!")
     self:setItems(items)
 end
@@ -236,8 +236,8 @@ end
 function ZoteroBrowser:zPath()
 	local path = "HOME"
 	if #self.paths > 0 then
-		if self.paths[#self.paths] == "search" then
-			path = "Search results"
+		if self.keys[#self.keys] == "search" then
+			path = "Search results: '"..self.paths[#self.paths].."'"
 		else
 			path = "/"..table.concat(self.paths, "")
 		end	
