@@ -23,7 +23,6 @@ local Geom = require("ui/geometry")
 -- /storage/<KEY>/filename.pdf: Actual PDF files
 -- /storage/<KEY>/version: Version number of downloaded attachment
 -- /meta.lua: Metadata containing library version, items etc.
-
 local API = { ["version"] = "JA v1.0 dev"}
 
 local SUPPORTED_MEDIA_TYPES = {
@@ -33,6 +32,9 @@ local SUPPORTED_MEDIA_TYPES = {
 }
 
 local ZOTERO_BASE_URL = "https://api.zotero.org"
+
+-- Update whenever the database scheme is updated/changed
+local db_version = 1
 
 local ZOTERO_DB_SCHEMA = [[
 CREATE TABLE IF NOT EXISTS itemData (
@@ -443,6 +445,16 @@ INSERT INTO attachment_versions(key,version)
        ON CONFLICT DO UPDATE SET version = excluded.version;
 ]];
 
+-- get user library version and last sync
+local ZOTERO_GET_USERLIB_VERSION = [[ 
+SELECT version, lastSync FROM libraries WHERE libraryID = 1;
+]]
+
+-- set library version and last sync for user library (which always should have libraryID = 1)
+local ZOTERO_SET_USERLIB_VERSION = [[ 
+UPDATE libraries SET version = ?, lastSync = unixepoch('now') WHERE libraryID = 1;
+]]
+
 -- to check whether changes where made
 local ZOTERO_DB_CHANGES = [[ SELECT changes() ]]
 
@@ -518,7 +530,7 @@ function API.openDB()
 		--API.db:exec(ZOTERO_CREATE_VIEWS)
 		API.db:exec("PRAGMA foreign_keys=ON")
 		--logger.info("Zotero: db opened with foreign keys enabled: ", tonumber(unpack(API.db:exec("PRAGMA foreign_keys")[1])))
-		if API.getLibraryVersion() == 0 then
+		if API.getDatabaseVersion() == 0 then
 			logger.info("Zotero: db version is 0. Set up tables.")
 			API.db:exec(ZOTERO_DB_SCHEMA)
 			logger.info("Zotero: Set up user library.")
@@ -540,7 +552,9 @@ function API.openDB()
 			API.db:exec(ZOTERO_DB_INIT_COLLECTIONS)
 			-- Create index for item keys
 			API.db:exec(ZOTERO_CREATE_ITEMKEY_INDEX)
+			API.setDatabaseVersion(db_version)
 		else
+			API.getUserLibraryVersion()
 			logger.info("Zotero: Local db version: "..API.libVersion)
 		end
         return API.db
@@ -590,7 +604,7 @@ function API.getStats()
 	local i = tonumber(db:rowexec("SELECT COUNT(*) FROM items;"))
 	local a = tonumber(db:rowexec("SELECT COUNT(*) FROM itemAttachments;"))
 	local n = tonumber(db:rowexec("SELECT COUNT(*) FROM itemAnnotations;"))
-	local stats = { ["libVersion"] = API.getLibraryVersion(), ["collections"] = c, ["items"] = i, ["attachments"] = a, ["annotations"] = n }
+	local stats = { ["libVersion"] = API.getUserLibraryVersion(), ["collections"] = c, ["items"] = i, ["attachments"] = a, ["annotations"] = n }
 	--logger.info(JSON.encode(stats))
 	
     return stats
@@ -645,10 +659,21 @@ function API.setWebDAVUrl(url)
     API.settings:saveSetting("webdav_url", url)
 end
 
-function API.getLibraryVersion()
-    if API.libVersion == nil then
+function API.getDatabaseVersion()
+--    if API.libVersion == nil then
 		local db = API.openDB()
 		local result, ncol = db:exec(ZOTERO_GET_DB_VERSION)
+		assert(ncol == 1)
+		local version = tonumber(result[1][1])
+--		API.libVersion = version
+--	end
+    return version
+end
+
+function API.getUserLibraryVersion()
+    if API.libVersion == nil then
+		local db = API.openDB()
+		local result, ncol = db:exec(ZOTERO_GET_USERLIB_VERSION)
 		assert(ncol == 1)
 		local version = tonumber(result[1][1])
 		API.libVersion = version
@@ -656,10 +681,17 @@ function API.getLibraryVersion()
     return API.libVersion
 end
 
-function API.setLibraryVersion(version)
+function API.setDatabaseVersion(version)
     API.libVersion = tonumber(version)
     local db = API.openDB()
     local sql = "PRAGMA user_version = " .. tostring(API.libVersion) .. ";"
+    db:exec(sql)
+end
+
+function API.setUserLibraryVersion(version)
+    API.libVersion = tonumber(version)
+    local db = API.openDB()
+    local sql = "UPDATE libraries SET version = " .. tostring(API.libVersion) .. ", lastSync = unixepoch('now') WHERE libraryID = 1;"
     db:exec(sql)
 end
 
@@ -920,7 +952,7 @@ function API.fetchZoteroItems(since, progress_callback)
     local callback = progress_callback or function() end
 
     local db = API.openDB()
-    if since == nil then  since = API.getLibraryVersion() end
+    if since == nil then  since = API.getUserLibraryVersion() end
 	-- verify access
     local e = API.verifyZoteroAccess()
     if e ~= nil then return e end
@@ -1011,7 +1043,7 @@ function API.fetchZoteroCollections(since, progress_callback)
     local callback = progress_callback or function() end
 
     local db = API.openDB()
-    if since == nil then  since = API.getLibraryVersion() end
+    if since == nil then  since = API.getUserLibraryVersion() end
 	-- verify access
     local e = API.verifyZoteroAccess()
     if e ~= nil then return e end
@@ -1097,7 +1129,7 @@ function API.syncAllItems(progress_callback)
     local callback = progress_callback or function() end
 
     local db = API.openDB()
-    local since = API.getLibraryVersion()
+    local since = API.getUserLibraryVersion()
 	--logger.info("Local Zotero lib version: "..since)
 	
 	-- verify access
@@ -1121,7 +1153,7 @@ function API.syncAllItems(progress_callback)
 	e = API.fetchZoteroItems(since, callback)
     if e ~= nil then return e end
 	
-    API.setLibraryVersion(r)
+    API.setUserLibraryVersion(r)
 	
     API.batchDownload(callback)
 
@@ -1599,7 +1631,7 @@ function API.createItems(items)
         end
 
         local request_json = JSON.encode(request_items)
-        headers["if-unmodified-since"] = API.getLibraryVersion()
+        headers["if-unmodified-since"] = API.getUserLibraryVersion()
         local response = {}
         logger.dbg(("Zotero: POST request to %s, body:\n%s"):format(create_url, request_json))
         local r,c, response_headers = https.request {
@@ -1624,7 +1656,7 @@ function API.createItems(items)
         --local new_library_version = response_headers["last-modified-version"]
 ----        print("New lib version: ", new_library_version)
         --if new_library_version ~= nil then
-            --API.setLibraryVersion(new_library_version)
+            --API.setUserLibraryVersion(new_library_version)
         --else
             --logger.err("Z: could not update library version from create request, got " .. tostring(new_library_version))
         --end
@@ -1688,7 +1720,7 @@ function API.syncItemAnnotations(item, annotation_callback)
     
     local settings = LuaSettings:open(BaseUtil.joinPath(fileDir, ".zotero.metadata.lua"))    
     local lastSyncedLibVersion = settings:readSetting("libraryVersion", 0)
-    local libVersion = tonumber(API.getLibraryVersion())
+    local libVersion = tonumber(API.getUserLibraryVersion())
     print("Local lib version: ", lastSyncedLibVersion)
     if lastSyncedLibVersion >= libVersion then 
         print("No need to check Zotero database") 
@@ -1860,7 +1892,7 @@ function API.syncItemAnnotations(item, annotation_callback)
     end
     
     settings:saveSetting("zoteroItems", zoteroItems)
-    settings:saveSetting("libraryVersion", tonumber(API.getLibraryVersion()))
+    settings:saveSetting("libraryVersion", tonumber(API.getUserLibraryVersion()))
     settings:flush() 
     docSettings:flush()
 end
@@ -1886,7 +1918,7 @@ function API.attachItemAnnotations(item, annotation_callback)
     
 	local docSettings = DocSettings:open(filePath)    
     local lastSyncedLibVersion = docSettings:readSetting("zoteroLibVersion", 0)
-    local libVersion = API.getLibraryVersion()
+    local libVersion = API.getUserLibraryVersion()
 
     if lastSyncedLibVersion < libVersion then 
         --print("Checking item\'s annotations in Zotero database")
