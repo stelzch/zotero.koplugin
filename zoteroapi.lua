@@ -1557,32 +1557,40 @@ function API.syncAnnotations(progress_callback)
     stmt:close()
 	local stmt_ts = db:prepare(ZOTERO_SET_ATTACHMENT_LASTSYNC)
 	
-    for i = 1, item_count do
-        local key = files[1][i]
-        local filename = files[2][i]
-        local db_ts = tonumber(files[3][i])
-        
-        local file_path = API.storage_dir .. "/" .. key .. "/" .. filename
-        -- Check time of last modification
-        -- TO DO
-		--local targetDir, targetPath = API.getDirAndPath(item)
-		local sidecarFile = DocSettings:findSidecarFile (file_path, no_legacy)
-		if sidecarFile then	-- only can have local annotations if sidecar file exists...
-			local file_ts = lfs.attributes(sidecarFile, "modification")
-			--print(file_ts, db_ts, file_ts > db_ts)
-			-- Compare to last sync recorded in db
-			if file_ts > db_ts then	-- sidecar files has been modified since last sync
-				Annotations.createAnnotations(file_path, key, API.createItems)
-				stmt_ts:reset():bind1(1, key):step()
- 			end
-		else
-			-- TO-DO:
-			-- Should check if local attachment still exists and update db if need be...
+    if item_count then
+		local defaultColor = API.settings:readSetting("annotationDefaultColor")
+		Annotations.setDefaultColor(defaultColor)
+		for i = 1, item_count do
+			local key = files[1][i]
+			local filename = files[2][i]
+			local db_ts = tonumber(files[3][i])
+			
+			local file_path = API.storage_dir .. "/" .. key .. "/" .. filename
+			-- Check time of last modification
+			-- TO DO
+			--local targetDir, targetPath = API.getDirAndPath(item)
+			local sidecarFile = DocSettings:findSidecarFile (file_path, no_legacy)
+			if sidecarFile then	-- only can have local annotations if sidecar file exists...
+				local file_ts = lfs.attributes(sidecarFile, "modification")
+				--print(file_ts, db_ts, file_ts > db_ts)
+				-- Compare to last sync recorded in db
+				if file_ts > db_ts then	-- sidecar files has been modified since last sync
+					local fails = Annotations.createAnnotations(file_path, key, API.createItems)
+					if fails == 0 
+						then stmt_ts:reset():bind1(1, key):step() 
+					else
+						logger.info("Zotero: Failed annotation uploads: ", fails)
+					end
+				end
+			else
+				-- TO-DO:
+				-- Should check if local attachment still exists and update db if need be...
+			end
+					
+			if progress_callback ~= nil and (i == 1 or i % 10 == 0 or i == item_count) then
+				progress_callback(string.format(_("Syncing annotations of file %i/%i"), i, item_count))
+			end
 		end
-				
-        if progress_callback ~= nil and (i == 1 or i % 10 == 0 or i == item_count) then
-            progress_callback(string.format(_("Syncing annotations of file %i/%i"), i, item_count))
-        end
     end
 end
 
@@ -1606,7 +1614,7 @@ function API.createItems(items)
     local headers = API.zoteroHeader
     local create_url = API.userLibraryURL.."/items"
 
-
+	local fails = {}
     for request_no=1,total_requests do
         local request_items = {}
         local start_item = (request_no - 1) * API_MAX_ITEMS_PER_REQUEST
@@ -1658,9 +1666,14 @@ function API.createItems(items)
                 ["key"] = zotero_key
             }
         end
+        for k,v in pairs(result["failed"]) do
+            table.insert(fails, v)
+        end
     end
-
-    return created_items, nil
+	if #fails > 0 then
+		logger.info("Zotero failed to create some items: ", JSON.encode(fails))
+	end
+    return created_items, fails
 end
 
 function getPageDimensions(filePath)
