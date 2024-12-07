@@ -604,7 +604,8 @@ function API.getStats()
 	local i = tonumber(db:rowexec("SELECT COUNT(*) FROM items;"))
 	local a = tonumber(db:rowexec("SELECT COUNT(*) FROM itemAttachments;"))
 	local n = tonumber(db:rowexec("SELECT COUNT(*) FROM itemAnnotations;"))
-	local stats = { ["libVersion"] = API.getUserLibraryVersion(), ["collections"] = c, ["items"] = i, ["attachments"] = a, ["annotations"] = n }
+	local lastsync = os.date("%Y-%m-%d %X",tonumber(db:rowexec("SELECT lastSync FROM libraries WHERE libraryID = 1;")))
+	local stats = { ["libVersion"] = API.getUserLibraryVersion(), ["lastSync"] = lastsync, ["collections"] = c, ["items"] = i, ["attachments"] = a, ["annotations"] = n }
 	--logger.info(JSON.encode(stats))
 	
     return stats
