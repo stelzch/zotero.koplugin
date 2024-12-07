@@ -46,6 +46,7 @@ Items without a collection will be shown in the top level.
 
 **Tapping** will open a sub-collection or try to open one of the attachments associated with the item.
 If it is not yet available locally (or out of date) it will **download** it from the zotero server.
+When opening an item from the Zotero brower it will also check its Zotero annotations (according to the local database) and attach supported annotations to the item.
  
 You can also **long-press** on items. The action depends on what type of item is selected:
 - Collection: Show a dialog which allows you to set this collection as an offline collection. 
@@ -111,6 +112,6 @@ return {
 
 In it's default configuration KOReader seems to open a dialog asking whether to write annotations into the pdf file. 
 Do *not* write annotation to the file.
-It probably is most convenient by disabling this dialog by going to
+It is probably most convenient to disable this dialog by going to
 'Top Menu -> Settings (cogwheel) -> Document -> Save document (write highlights into PDF)' and ticking 'Disable'
 
