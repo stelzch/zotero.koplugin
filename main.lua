@@ -428,8 +428,9 @@ function Plugin:addToMainMenu(menu_items)
 					local stats = ZoteroAPI.getStats()
 					UIManager:show(InfoMessage:new{
 						text = _("Plugin version: \n"..version..
-						"\n\nLibrary stats:\n\tVersion:\t\t\t"..stats.libVersion..
-						"\n\tCollections:\t\t"..stats.collections..
+						"\n\nLibrary info:\n  Version:\t\t\t"..stats.libVersion..
+						"\n  Last sync:  "..stats.lastSync..
+						"\n\nLibrary stats:\n\tCollections:\t\t"..stats.collections..
 						'\n\tTotal items:\t\t'..stats.items..
 						"\n\tAttachments:\t"..stats.attachments..
 						"\n\tAnnotations:\t"..stats.annotations.."\n"),
