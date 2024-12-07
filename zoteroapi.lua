@@ -1567,8 +1567,6 @@ function API.syncAnnotations(progress_callback)
 			
 			local file_path = API.storage_dir .. "/" .. key .. "/" .. filename
 			-- Check time of last modification
-			-- TO DO
-			--local targetDir, targetPath = API.getDirAndPath(item)
 			local sidecarFile = DocSettings:findSidecarFile (file_path, no_legacy)
 			if sidecarFile then	-- only can have local annotations if sidecar file exists...
 				local file_ts = lfs.attributes(sidecarFile, "modification")
@@ -1577,6 +1575,7 @@ function API.syncAnnotations(progress_callback)
 				if file_ts > db_ts then	-- sidecar files has been modified since last sync
 					local fails = Annotations.createAnnotations(file_path, key, API.createItems)
 					if fails == 0 
+						-- update last sync value to now
 						then stmt_ts:reset():bind1(1, key):step() 
 					else
 						logger.info("Zotero: Failed annotation uploads: ", fails)
