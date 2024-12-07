@@ -18,15 +18,15 @@ local Z2K_COLORS = {
 }
 
 local K2Z_COLORS = {
-    ["red"]    = "#FF3300",
-    ["orange"] = "#FF8800",
-    ["yellow"] = "#FFFF33",
-    ["green"]  = "#00AA66",
-    ["olive"]  = "#88FF77",
-    ["cyan"]   = "#00FFEE",
+    ["red"]    = "#ff6666",
+    ["orange"] = "#f19837",
+    ["yellow"] = "#ffd400",
+    ["green"]  = "#5fb236",
+    ["olive"]  = "#88ff77",
+    ["cyan"]   = "#00ffee",
     ["blue"]   = "#0066FF",
-    ["purple"] = "#EE00FF",
-    ["gray"] = "#aaaaaa",
+    ["purple"] = "#a28ae5",
+    ["gray"]   = "#aaaaaa",
 }
 
 local K2Z_STYLE = {
@@ -48,6 +48,10 @@ local defaultZColor = K2Z_COLORS["gray"]
 local function limitDigits(x, num_places)
     local fac = 10^num_places
     return math.floor(x * fac) / fac
+end
+
+function Annotations.setDefaultColor(ZColor)
+	defaultZColor = K2Z_COLORS[ZColor] or K2Z_COLORS["gray"]
 end
 
 function Annotations.getPageDimensions(file, pages)
@@ -246,6 +250,7 @@ function Annotations.convertZoteroToKOReader(annotation, page_height)
 end
 
 -- Create annotations for a single document using creation_callback.
+-- returns number of items it FAILED to sync (and error if applicable)
 function Annotations.createAnnotations(file_path, key, creation_callback)
     local doc_settings = DocSettings:open(file_path)
     if doc_settings.data == nil
@@ -254,7 +259,6 @@ function Annotations.createAnnotations(file_path, key, creation_callback)
         return
     end
 
-    local k_annotations_modified = false
     local k_annotations = doc_settings.data["annotations"]
     local z_annotations = {}
     local pages = {}
@@ -289,31 +293,32 @@ function Annotations.createAnnotations(file_path, key, creation_callback)
     end
 	--print(JSON.encode(z_annotations))
     if #z_annotations == 0 then
-        return nil, nil
+        return 0, nil
     end
     logger.dbg(("Zotero: creating annotations for %s:\n%s"):format(file_path, JSON.encode(z_annotations)))
     local created_items, e = creation_callback(z_annotations)
 
     if created_items == nil then
-        return nil, e
+        return #z_annotations, e
     end
 
+	local cnt = 0
     for k,v in pairs(created_items) do
         if v.key ~= nil then
             local k_index = index_map[k]
             assert(k_index ~= nil)
             k_annotations[k_index].zoteroKey = v.key
             k_annotations[k_index].zoteroVersion = v.version
-            k_annotations_modified = true
+            cnt = cnt + 1
             logger.info("New Zotero annotation created: ", JSON.encode(v))
         end
     end
 
-    if k_annotations_modified then
+    if cnt > 0 then
         doc_settings:flush()
     end
 
-    return nil, nil
+    return #z_annotations-cnt, nil
 end
 
 return Annotations
