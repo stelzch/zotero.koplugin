@@ -659,17 +659,26 @@ function API.setWebDAVUrl(url)
     API.settings:saveSetting("webdav_url", url)
 end
 
+-- Check database version. This should not change too often, but allows us to spot changes
+-- and possibly enable database mgration to newer version...
 function API.getDatabaseVersion()
---    if API.libVersion == nil then
-		local db = API.openDB()
-		local result, ncol = db:exec(ZOTERO_GET_DB_VERSION)
-		assert(ncol == 1)
-		local version = tonumber(result[1][1])
---		API.libVersion = version
---	end
-    return version
+	local db = API.openDB()
+	local result, ncol = db:exec(ZOTERO_GET_DB_VERSION)
+	assert(ncol == 1)
+    return tonumber(result[1][1])
 end
 
+function API.setDatabaseVersion(version)
+--    API.libVersion 
+	local dbversion = tonumber(version)
+    local db = API.openDB()
+    local sql = "PRAGMA user_version = " .. tostring(dbversion) .. ";"
+    db:exec(sql)
+end
+
+
+-- Zotero user library version. Used for syncing, as only changes since the last sync will
+-- be requested from the Zotero server
 function API.getUserLibraryVersion()
     if API.libVersion == nil then
 		local db = API.openDB()
@@ -681,13 +690,7 @@ function API.getUserLibraryVersion()
     return API.libVersion
 end
 
-function API.setDatabaseVersion(version)
-    API.libVersion = tonumber(version)
-    local db = API.openDB()
-    local sql = "PRAGMA user_version = " .. tostring(API.libVersion) .. ";"
-    db:exec(sql)
-end
-
+-- Update the local Zotero user library version number and 'lastSync' 
 function API.setUserLibraryVersion(version)
     API.libVersion = tonumber(version)
     local db = API.openDB()
@@ -725,21 +728,9 @@ function API.checkWebDAV()
     elseif c == 400 or c == 401 then
         return "Reached server, but access forbidden. Check username and password."
     end
-
-
 end
 
--- List of zotero items that need to be synced to the server.  Items that are
--- modified will have a "key" property, new items will not carry this property.
-function API.getModifiedItems()
-    if API.modified_items == nil then
-        API.modified_items = API.settings:readSetting("modified_items", {})
-    end
-
-    return API.modified_items
-end
-
--- https get call which decodes JSON data 
+-- https GET call which decodes JSON data 
 function API.getZoteroData(page_url)
 
 	local headers = API.zoteroHeader
@@ -794,13 +785,6 @@ function API.checkZoteroKey(page_url, headers)
 	return API.access
 end
 
-
-
-
--- This just syncs them to disk, it will not modify the Zotero collection!
-function API.saveModifiedItems()
-    API.settings:flush()
-end
 
 function API.verifyResponse(r, c)
     if r ~= 1 then
@@ -1720,7 +1704,7 @@ function API.syncItemAnnotations(item, annotation_callback)
     
     local settings = LuaSettings:open(BaseUtil.joinPath(fileDir, ".zotero.metadata.lua"))    
     local lastSyncedLibVersion = settings:readSetting("libraryVersion", 0)
-    local libVersion = tonumber(API.getUserLibraryVersion())
+    local libVersion = API.getUserLibraryVersion()
     print("Local lib version: ", lastSyncedLibVersion)
     if lastSyncedLibVersion >= libVersion then 
         print("No need to check Zotero database") 
@@ -1892,7 +1876,7 @@ function API.syncItemAnnotations(item, annotation_callback)
     end
     
     settings:saveSetting("zoteroItems", zoteroItems)
-    settings:saveSetting("libraryVersion", tonumber(API.getUserLibraryVersion()))
+    settings:saveSetting("libraryVersion", API.getUserLibraryVersion())
     settings:flush() 
     docSettings:flush()
 end
