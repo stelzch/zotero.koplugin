@@ -1558,7 +1558,7 @@ function API.syncAnnotations(progress_callback)
 	local stmt_ts = db:prepare(ZOTERO_SET_ATTACHMENT_LASTSYNC)
 	
     if item_count then
-		local defaultColor = API.settings:readSetting("annotationDefaultColor")
+		local defaultColor = API.settings:readSetting("annotation_default_color")
 		Annotations.setDefaultColor(defaultColor)
 		for i = 1, item_count do
 			local key = files[1][i]
