@@ -53,17 +53,17 @@ The first entry will be a 'fake' root collection, which is used for all items wh
  5. key: collection key as provided by Zotero API
  6. version: version of the collection
 
-	[[CREATE TABLE IF NOT EXISTS collections (    
-		collectionID INTEGER PRIMARY KEY,
-		collectionName TEXT NOT NULL,
-		parentCollectionID INT DEFAULT NULL,
-		libraryID INT NOT NULL,
-		key TEXT NOT NULL,
-		version INT NOT NULL DEFAULT 0,
-		synced INT NOT NULL DEFAULT 0,
-		UNIQUE (libraryID, key),
-		FOREIGN KEY (libraryID) REFERENCES libraries(libraryID) ON DELETE CASCADE,
-		FOREIGN KEY (parentCollectionID) REFERENCES collections(collectionID) ON DELETE CASCADE
+	[[CREATE TABLE IF NOT EXISTS collections (  
+		collectionID INTEGER PRIMARY KEY,  
+		collectionName TEXT NOT NULL,  
+		parentCollectionID INT DEFAULT NULL,  
+		libraryID INT NOT NULL,  
+		key TEXT NOT NULL,  
+		version INT NOT NULL DEFAULT 0,  
+		synced INT NOT NULL DEFAULT 0,  
+		UNIQUE (libraryID, key),  
+		FOREIGN KEY (libraryID) REFERENCES libraries(libraryID) ON DELETE CASCADE,  
+		FOREIGN KEY (parentCollectionID) REFERENCES collections(collectionID) ON DELETE CASCADE  
 	);]]
 
 
@@ -71,13 +71,14 @@ The first entry will be a 'fake' root collection, which is used for all items wh
 
 Keeps track of the main attributes of items (which all items have in common):
  1. itemID: primary key for item
- 2. itemTypeID: identifies the type of this item (see ['itemTypes' table])
+ 2. itemTypeID: identifies the type of this item (see [itemTypes table](#itemtypes-table))
  3. libraryID: identify the library this item belongs to
  4. key: text key as provided by Zotero API
  5.	version: version number 
  6. synced: ? **not used yet?**
 
-	[[CREATE TABLE IF NOT EXISTS items (    
+
+	[[CREATE TABLE IF NOT EXISTS items (  
 		itemID INTEGER PRIMARY KEY,    
 		itemTypeID INT NOT NULL,    
 		libraryID INT NOT NULL,    
