@@ -8,6 +8,14 @@ The layout of the sqlite DB (zotero.db) is loosely based on the database of the 
 When setting up its initial structure I copied across some of the tables and columns I thought would be needed and/or sounded useful.
 Some columns are still not used, and others might now be used in a different way than in the desktop client (I did not really check...).
 
+The database is opened with `foreign_keys` enabled, so that actions get automatically propagated to related tables.
+
+The `user_version` database property is used to track the version of the database structure. 
+When a new (empty) database is created, sqlite sets this to 0. 
+So by checking `user_version` we can work out whether the databse is initialised.
+Once initialisation is complete it is increased to the current database version (currently 1).
+
+
 ### 'libraries' table
 
 Keeps track of the libraries contained in this database. When the database is first set up the plugin automatically creates one entry in this table.
@@ -36,7 +44,14 @@ The remaining columns are currently unused.
 
 ### 'collections' table
 
-Keeps track of the collections contained in this database.
+Keeps track of the collections contained in this database. 
+The first entry will be a 'fake' root collection, which is used for all items which are not part of any collection.
+ 1. collectionID: primary db key
+ 2. collectionName: name of the collection
+ 3. parentCollectionID: ID of the parent collection
+ 4. libraryID: library ID (currently hardcoded to 1)
+ 5. key: collection key as provided by Zotero API
+ 6. version: version of the collection
 
 	[[CREATE TABLE IF NOT EXISTS collections (    
 		collectionID INTEGER PRIMARY KEY,
@@ -54,15 +69,14 @@ Keeps track of the collections contained in this database.
 
 ### 'items' table
 
-
 Keeps track of the main attributes of items (which all items have in common):
  1. itemID: primary key for item
- 2. itemTypeID: 
+ 2. itemTypeID: identifies the type of this item (see ['itemTypes' table])
  3. libraryID: identify the library this item belongs to
  4. key: text key as provided by Zotero API
  5.	version: version number 
  6. synced: ? **not used yet?**
- 
+
 	[[CREATE TABLE IF NOT EXISTS items (    
 		itemID INTEGER PRIMARY KEY,    
 		itemTypeID INT NOT NULL,    
@@ -74,7 +88,7 @@ Keeps track of the main attributes of items (which all items have in common):
 		FOREIGN KEY (libraryID) REFERENCES libraries(libraryID) ON DELETE CASCADE
 	);]]
 
----
+
 ### 'itemData' table
 
 Item information in the format returned by the Zotero API. 
@@ -133,7 +147,7 @@ If an item is a (supported) annotation then it will be included in this table.
 
 ### 'itemTypes' table
 
-This table is pre-populated with all the different Zotero item types when the databse is first set up.
+This table is pre-populated with all the different Zotero item types when the database is first set up.
 
 	[[CREATE TABLE IF NOT EXISTS itemTypes ( 
 		itemTypeID INTEGER PRIMARY KEY, 
