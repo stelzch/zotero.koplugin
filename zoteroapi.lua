@@ -23,7 +23,7 @@ local Geom = require("ui/geometry")
 -- /storage/<KEY>/filename.pdf: Actual PDF files
 -- /storage/<KEY>/version: Version number of downloaded attachment
 -- /meta.lua: Metadata containing library version, items etc.
-local API = { ["version"] = "JA v1.0 dev"}
+local API = { ["version"] = "JA v1.0 RC2"}
 
 local SUPPORTED_MEDIA_TYPES = {
     [1] = "application/pdf",
