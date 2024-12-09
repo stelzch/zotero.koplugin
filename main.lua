@@ -484,7 +484,7 @@ function Plugin:setAccount()
 
                         ZoteroAPI.setUserID(fields[1])
                         ZoteroAPI.setAPIKey(fields[2])
-                        ZoteroAPI.saveModifiedItems()
+                        ZoteroAPI.saveSettingsToFile()
                         self.account_dialog:onClose()
                         UIManager:close(self.account_dialog)
                     end
@@ -531,7 +531,7 @@ function Plugin:setWebdavAccount()
                         ZoteroAPI.setWebDAVUrl(fields[1])
                         ZoteroAPI.setWebDAVUser(fields[2])
                         ZoteroAPI.setWebDAVPassword(fields[3])
-                        ZoteroAPI.saveModifiedItems()
+                        ZoteroAPI.saveSettingsToFile()
                         self.webdav_account_dialog:onClose()
                         UIManager:close(self.webdav_account_dialog)
                     end
@@ -552,7 +552,7 @@ function Plugin:setItemsPerPage()
 		value_max = 1000,
         callback = function(d)
 						ZoteroAPI.getSettings():saveSetting("items_per_page", d.value)
-						ZoteroAPI.getSettings():flush()
+						ZoteroAPI.saveSettingsToFile()
                         UIManager:show(InfoMessage:new{
                             text = _("This change requires a restart of KOReader to take effect."),
                             timeout = 3,

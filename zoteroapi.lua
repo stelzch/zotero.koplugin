@@ -704,6 +704,10 @@ function API.getSettings()
     return API.settings
 end
 
+-- Save settings to config file
+function API.saveSettingsToFile()
+    return API.settings:flush()
+end
 
 -- Check that a webdav connection works by performing a PROPFIND operation on the
 -- URL with the associated credentials.
