@@ -594,6 +594,8 @@ function API.init(zotero_dir)
 	local ts = lfs.attributes(path, "modification")
 	API.version = API.version.." ("..os.date("%Y-%m-%d %X",ts)..")" 
 	logger.info("Zotero plugin version: "..API.version)
+	
+	API.scanStorage()
 end
 
 function API.getStats()
@@ -1697,6 +1699,51 @@ function getPageDimensions(filePath)
     print("Page dimensions: ", JSON.encode(pageDims))
     document:close()
     return pageDims
+end
+
+function API.scanStorage()
+	logger.info("Scanning ", API.storage_dir)
+	local extraDirs = {}
+	local zotItems = 0
+	for file in lfs.dir(API.storage_dir) do
+		--print(file)
+		if file ~= "." and file ~= ".." then
+			local f = API.storage_dir.."/"..file
+			local mode = lfs.attributes(f, "mode")
+			if mode == "directory" then
+				-- check whether this is a key in the database
+				local local_version, lastSync, itemVersion, itemID = API.getAttachmentVersion(file)
+				--logger.info("Zotero: ItemID:", itemID,", local item:",local_version, "(synced at", lastSync, "), item version:", itemVersion)
+				if itemID ~= nil then
+					local item = API.getItem(file)
+					local targetDir, targetPath = API.getDirAndPath(item)
+					local file_ts = lfs.attributes(targetPath, "modification")
+					if file_ts then  -- file exists locally
+						-- get local file version from doc settings file
+						zotItems = zotItems + 1
+						local docSettings = DocSettings:open(targetPath)    
+						local libVersionAtLastSync  = docSettings:readSetting("zoteroLibVersion", 0)
+						docSettings:close()
+						if libVersionAtLastSync >= itemVersion then
+							--logger.info("Zotero: Update db with local file version.")
+							API.setAttachmentVersion(itemID, itemVersion)
+						else
+							--logger.info("Zotero: Local file is not up-to-date.")
+							-- Set to lowest non-zero library number to make db aware that there is a local item
+							API.setAttachmentVersion(itemID, 1)
+						end	
+					end
+				else
+					table.insert(extraDirs, file)
+				end
+			end
+		end
+	end
+	logger.info("Zotero: Storage scan found", zotItems, "local attachment items.")
+	if #extraDirs then
+		logger.info("Zotero: Found", #extraDirs, "extra directories: ", unpack(extraDirs))
+	end
+	return zotItems
 end
 
 -- Sync annotations for specified item from Zotero with sdr folder
