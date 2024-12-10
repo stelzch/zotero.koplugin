@@ -86,7 +86,7 @@ Keeps track of the main attributes of items (which all items have in common):
 		version INT NOT NULL DEFAULT 0,    
 		synced INT NOT NULL DEFAULT 0,    
 		UNIQUE (libraryID, key),    
-		FOREIGN KEY (libraryID) REFERENCES libraries(libraryID) ON DELETE CASCADE
+		FOREIGN KEY (libraryID) REFERENCES libraries(libraryID) ON DELETE CASCADE  
 	);]]
 
 
@@ -108,7 +108,10 @@ In principle only the `data` field would be all that is needed, but for now it a
 
 ### 'collectionItems' table
 
-If an item is part of a collection it will be included in this table.
+If an item is part of a collection it will be included in this table. Note that items can be part of several collections.
+1. collectionID: ID for the collection as defined in collections table
+2. itemID: ID of item
+
 
 	[[CREATE TABLE IF NOT EXISTS collectionItems (
 		collectionID INT NOT NULL,
@@ -121,38 +124,79 @@ If an item is part of a collection it will be included in this table.
 
 ### 'itemAttachments' table
 
-If an item is a (supported) attachment then it will be included in this table.
+If an item is a (supported) attachment then it will be included in this table, which keeps some extra data:
+1. itemID: ID of item
+2. parentItemID: ID of the parent item (which can be the attachment itself if it does not have an 'enclosing' document)
+3. syncedVersion: version of the local copy of the item (a non-zero value is used as an indication that there should be a local copy present!)
+4. lastSync: timestamp of last sync (check)
 
-	[[CREATE TABLE IF NOT EXISTS itemAttachments ( 
+	CREATE TABLE IF NOT EXISTS itemAttachments ( 
 		itemID INTEGER PRIMARY KEY, 
 		parentItemID INT,
 		syncedVersion INT NOT NULL DEFAULT 0,
 		lastSync INT NOT NULL DEFAULT 0,
 		FOREIGN KEY (itemID) REFERENCES items(itemID) ON DELETE CASCADE,
 		FOREIGN KEY (parentItemID) REFERENCES items(itemID) ON DELETE CASCADE
-	);]]
+	);
+
+Note that the `syncedVersion` and `lastSync` can not be relied on completely, as local items could have been changed outside the Zotero plugin.
 
 
-### 'itemAttachments' table
+### 'itemAnnotations' table
 
 If an item is a (supported) annotation then it will be included in this table.
 
-	[[CREATE TABLE IF NOT EXISTS itemAnnotations ( 
+	CREATE TABLE IF NOT EXISTS itemAnnotations ( 
 		itemID INTEGER PRIMARY KEY, 
 		parentItemID INT,
 		syncedVersion INT NOT NULL DEFAULT 0,
 		FOREIGN KEY (itemID) REFERENCES items(itemID) ON DELETE CASCADE,
 		FOREIGN KEY (parentItemID) REFERENCES items(itemID) ON DELETE CASCADE
-	);]]
+	);
 
 
 ### 'itemTypes' table
 
 This table is pre-populated with all the different Zotero item types when the database is first set up.
 
-	[[CREATE TABLE IF NOT EXISTS itemTypes ( 
+	CREATE TABLE IF NOT EXISTS itemTypes ( 
 		itemTypeID INTEGER PRIMARY KEY, 
 		typeName TEXT, 
 		display INT DEFAULT 1 
-	);]]
+	);
 
+
+## File storage structure
+
+All the user data is stored in the Zotero subfolder of the KOReader settings: `<KOReader>/zotero`
+
+The plugin configuration is saved in the `meta.lua` file:
+
+	return {
+		["api_key"] = "",           -- Zotero API secret key
+		["user_id"] = "",           -- API user ID, should be an integer number
+		["webdav_enabled"] = false, -- set to true if you use WebDAV to store attachments
+		["webdav_url"] = "",        -- URL to WebDAV zotero directory
+		["webdav_user"] = "",
+		["webdav_password"] = "",
+	}
+	
+The sqlite database is in `zotero.db`. If it does not exist it will be created on first opening of the plugin.
+
+Downloaded attachments get saved to the `storage` subfolder.
+
+### storage subfolder
+
+Each attachment is saved in its separate `subfolder` named by the alpha-numeric item key provided by the Zotero API.
+The attachment should be the only file in this subfolder, named as defined through the Zotero item record.
+Depending on your KOReader configuration there might be subfolder with the extension `sdr` which contains the KOReader sidecar file for the item.
+The sidecar file `metadata.pdf.lua` is where KOReader keeps its metadata for the item, such as number of pages, last page viewed and realueding statistics.
+
+The most relevant entry for our zotero plugin is `annotations`, which catalogues all the file annotations KOReader knowns about. 
+The Zotero plugin hijacks the sidcar file to also some of the metadata it needs to work smoothly.
+It adds the following top level entries:
+1. 
+
+And if the plugin has synced annotations with Zotero, it will add the following fields to the relevant annotation:
+1.
+2.
