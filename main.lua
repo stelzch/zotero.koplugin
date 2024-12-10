@@ -361,6 +361,12 @@ function Plugin:addToMainMenu(menu_items)
                         end,
                     },
                     {
+                        text = _("Re-scan storage for local items"),
+                        callback = function()
+                            self:onZoteroRescanAction()
+                        end,
+                    },
+                    {
                         text = _("Resync entire collection"),
                         callback = function()
                             ZoteroAPI.resetSyncState()
@@ -618,6 +624,20 @@ function Plugin:onZoteroReanalyzeAction()
         else
             Trapper:info(e)
         end
+
+    end)
+end
+
+function Plugin:onZoteroRescanAction()
+    if not self:checkInitialized() then
+        return
+    end
+    local Trapper = require("frontend/ui/trapper")
+    Trapper:wrap(function()
+        Trapper:info("Scanning local Zotero storage.")
+        local cnt = ZoteroAPI.scanStorage()
+		
+		Trapper:info("Found "..cnt.." local attachments.")
 
     end)
 end

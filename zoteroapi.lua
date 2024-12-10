@@ -595,7 +595,7 @@ function API.init(zotero_dir)
 	API.version = API.version.." ("..os.date("%Y-%m-%d %X",ts)..")" 
 	logger.info("Zotero plugin version: "..API.version)
 	
-	API.scanStorage()
+	--API.scanStorage()
 end
 
 function API.getStats()
