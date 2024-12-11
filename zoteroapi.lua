@@ -1302,6 +1302,8 @@ function API.downloadAndGetPath(key, download_callback)
 
     local downloadRequired = true
     
+    --API.getAttachmentInfo(item)
+    
     local targetDir, targetPath = API.getDirAndPath(item)
 	local file_ts = lfs.attributes(targetPath, "modification")
 	if file_ts then  -- file already exists locally
@@ -1943,6 +1945,37 @@ function API.syncItemAnnotations(item, annotation_callback)
     settings:saveSetting("libraryVersion", API.getUserLibraryVersion())
     settings:flush() 
     docSettings:flush()
+end
+
+-- Add Zotero document info to sidecar file
+function API.getAttachmentInfo(item)
+
+	local itemKey = item.key
+    local fileDir, filePath = API.getDirAndPath(item)
+
+    if filePath == nil then
+        return "Error: could not find item"
+    end
+    print(JSON.encode(item))
+	local docSettings = DocSettings:open(filePath)  
+	local docProps = docSettings:readSetting("doc_props", {})
+	print(item.data.parentItem)
+	if item.data.parentItem ~= nil then
+		local parent = API.getItem(item.data.parentItem)
+		if item.data.title == item.data.filename then
+			docProps["title"] = parent.data.title
+		elseif item.data.title then 
+			docProps["title"] = item.data.title 
+		end
+		docProps["authors"] = parent.meta.creatorSummary
+		docProps["description"] = parent.data.abstractNote
+	elseif item.data.title then 
+		docProps["title"] = item.data.title 
+	end
+	print(JSON.encode(docProps))
+    docSettings:saveSetting("doc_props", docProps)
+    docSettings:flush()
+
 end
 
 -- Attach Zotero annotations for specified item
