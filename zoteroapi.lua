@@ -1302,7 +1302,7 @@ function API.downloadAndGetPath(key, download_callback)
 
     local downloadRequired = true
     
-    --API.getAttachmentInfo(item)
+    API.getAttachmentInfo(item)
     
     local targetDir, targetPath = API.getDirAndPath(item)
 	local file_ts = lfs.attributes(targetPath, "modification")
@@ -1957,8 +1957,8 @@ function API.getAttachmentInfo(item)
         return "Error: could not find item"
     end
     print(JSON.encode(item))
-	local docSettings = DocSettings:open(filePath)  
-	local docProps = docSettings:readSetting("doc_props", {})
+	local customSettings = DocSettings:openSettingsFile()  
+	local docProps = {}
 	print(item.data.parentItem)
 	if item.data.parentItem ~= nil then
 		local parent = API.getItem(item.data.parentItem)
@@ -1967,14 +1967,18 @@ function API.getAttachmentInfo(item)
 		elseif item.data.title then 
 			docProps["title"] = item.data.title 
 		end
-		docProps["authors"] = parent.meta.creatorSummary
-		docProps["description"] = parent.data.abstractNote
+		if parent.meta.creatorSummary ~= "" then docProps["authors"] = parent.meta.creatorSummary end
+		if parent.data.abstractNote ~= "" then docProps["description"] = parent.data.abstractNote end
+		if parent.data.language ~= "" then docProps["language"] = parent.data.language end
+		if parent.data.series ~= "" then docProps["series"] = parent.data.series end
+		if parent.data.tags[1] ~= nil then docProps["keywords"] = table.concat(parent.data.tags, ", ") end
+
 	elseif item.data.title then 
 		docProps["title"] = item.data.title 
 	end
 	print(JSON.encode(docProps))
-    docSettings:saveSetting("doc_props", docProps)
-    docSettings:flush()
+    customSettings:saveSetting("custom_props", docProps)
+    customSettings:flushCustomMetadata(filePath)
 
 end
 
