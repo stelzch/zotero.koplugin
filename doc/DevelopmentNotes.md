@@ -78,6 +78,7 @@ Keeps track of the main attributes of items (which all items have in common):
  5.	version: version number 
  6. synced: ? **not used yet?**
   
+Synced column is currently not used at all.
   
 	CREATE TABLE IF NOT EXISTS items (  
 		itemID INTEGER PRIMARY KEY,    
@@ -113,6 +114,7 @@ If an item is part of a collection it will be included in this table. Note that 
 1. collectionID: ID for the collection as defined in collections table
 2. itemID: ID of item
 
+Only items in this table will be displayed in the Zotero browser.
   
 	CREATE TABLE IF NOT EXISTS collectionItems (  
 		collectionID INT NOT NULL,  
@@ -131,6 +133,8 @@ If an item is a (supported) attachment then it will be included in this table, w
 3. syncedVersion: version of the local copy of the item (a non-zero value is used as an indication that there should be a local copy present!)
 4. lastSync: timestamp of last sync (check)  
   
+Note that the `syncedVersion` and `lastSync` can not be relied on completely, as local items could have been changed outside the Zotero plugin.
+
 	CREATE TABLE IF NOT EXISTS itemAttachments ( 
 		itemID INTEGER PRIMARY KEY, 
 		parentItemID INT,
@@ -139,8 +143,6 @@ If an item is a (supported) attachment then it will be included in this table, w
 		FOREIGN KEY (itemID) REFERENCES items(itemID) ON DELETE CASCADE,
 		FOREIGN KEY (parentItemID) REFERENCES items(itemID) ON DELETE CASCADE
 	);
-
-Note that the `syncedVersion` and `lastSync` can not be relied on completely, as local items could have been changed outside the Zotero plugin.
 
 
 ### 'itemAnnotations' table
@@ -180,6 +182,8 @@ The plugin configuration is saved in the `meta.lua` file:
 		["webdav_url"] = "",        -- URL to WebDAV zotero directory
 		["webdav_user"] = "",
 		["webdav_password"] = "",
+		["annotation_default_color"] = "purple",  -- Color to use on Zotero if KOReader does not specify a color for the annotation
+		["items_per_page"] = 14,	-- items to display per page in Zotero browser
 	}
 	
 The sqlite database is in `zotero.db`. If it does not exist it will be created on first opening of the plugin.
@@ -196,8 +200,10 @@ The sidecar file `metadata.pdf.lua` is where KOReader keeps its metadata for the
 The most relevant entry for our zotero plugin is `annotations`, which catalogues all the file annotations KOReader knowns about. 
 The Zotero plugin hijacks the sidcar file to also some of the metadata it needs to work smoothly.
 It adds the following top level entries:
-1. 
+1. zoteroLibVersion: Zotero library version at the last time annotations where syncronised with this sidecar file.
+2. page_height: page height in points, which is needed to convert coordinates between KOReader and Zotero annotations. Currently simply assumes that all pages have the same height...
 
 And if the plugin has synced annotations with Zotero, it will add the following fields to the relevant annotation:
-1.
-2.
+1. zoteroKey: alpha-numeric key for the annotation item as provided by the Zotero API
+2. zoteroSortIndex: to help zotero sort annotations correctly. Currently NOT using the same algorithm as zotero, so only approximately correct... This is also used internally by the plugin when it tries to sort annotation sinto the correct order
+3. zoteroVersion: annotation item version as provided by the Zotero API.
