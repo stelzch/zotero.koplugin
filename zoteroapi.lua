@@ -1968,11 +1968,12 @@ function API.getAttachmentInfo(item)
 	if item.data.parentItem ~= nil then
 		local parent = API.getItem(item.data.parentItem)
 		--if item.data.title == item.data.filename then
-			--docProps["title"] = parent.data.title
-		--else
-		if item.data.title then 
-			docProps["title"] = item.data.title 
+		if parent.data.title then
+			docProps["title"] = parent.data.title
 		end
+		--elseif item.data.title then 
+		--	docProps["title"] = item.data.title 
+		--end
 		--print(JSON.encode(parent.data))
 --		if parent.meta.creatorSummary ~= "" then docProps["authors"] = parent.meta.creatorSummary end
 		if parent.data.creators[1] ~= nil then 
@@ -1998,7 +1999,7 @@ function API.getAttachmentInfo(item)
 	elseif item.data.title then 
 		docProps["title"] = item.data.title 
 	end
-	print(JSON.encode(docProps))
+	--print(JSON.encode(docProps))
     customSettings:saveSetting("custom_props", docProps)
     customSettings:flushCustomMetadata(filePath)
 
