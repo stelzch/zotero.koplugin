@@ -1350,6 +1350,12 @@ function API.downloadAndGetPath(key, download_callback)
 				return nil, errormsg
 			end
 		end
+		-- Make sure libVersion is added to metadata for non-pdf files...
+		if item.data.contentType ~= SUPPORTED_MEDIA_TYPES[1] then
+			local docSettings = DocSettings:open(targetPath)    
+			docSettings:saveSetting("zoteroLibVersion", API.getUserLibraryVersion())
+			docSettings:flush()
+		end
 	end
 	
 	-- Check whether there are any annotations that need to be attached and save library version to sdr file 
@@ -1956,10 +1962,9 @@ function API.getAttachmentInfo(item)
     if filePath == nil then
         return "Error: could not find item"
     end
-    print(JSON.encode(item))
+    --print(JSON.encode(item))
 	local customSettings = DocSettings:openSettingsFile()  
 	local docProps = {}
-	print(item.data.parentItem)
 	if item.data.parentItem ~= nil then
 		local parent = API.getItem(item.data.parentItem)
 		if item.data.title == item.data.filename then
@@ -1967,7 +1972,16 @@ function API.getAttachmentInfo(item)
 		elseif item.data.title then 
 			docProps["title"] = item.data.title 
 		end
-		if parent.meta.creatorSummary ~= "" then docProps["authors"] = parent.meta.creatorSummary end
+--		if parent.meta.creatorSummary ~= "" then docProps["authors"] = parent.meta.creatorSummary end
+		if parent.data.creators[1] ~= nil then 
+			local authors = {}
+			for _, v in ipairs(parent.data.creators) do
+				if v.creatorType == "author" then
+					table.insert(authors, v.firstName.." "..v.lastName)
+				end
+			end
+			docProps["authors"] = table.concat(authors, ", ")
+		end
 		if parent.data.abstractNote ~= "" then docProps["description"] = parent.data.abstractNote end
 		if parent.data.language ~= "" then docProps["language"] = parent.data.language end
 		if parent.data.series ~= "" then docProps["series"] = parent.data.series end
@@ -1976,7 +1990,7 @@ function API.getAttachmentInfo(item)
 	elseif item.data.title then 
 		docProps["title"] = item.data.title 
 	end
-	print(JSON.encode(docProps))
+	--print(JSON.encode(docProps))
     customSettings:saveSetting("custom_props", docProps)
     customSettings:flushCustomMetadata(filePath)
 
