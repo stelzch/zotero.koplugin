@@ -1967,11 +1967,13 @@ function API.getAttachmentInfo(item)
 	local docProps = {}
 	if item.data.parentItem ~= nil then
 		local parent = API.getItem(item.data.parentItem)
-		if item.data.title == item.data.filename then
-			docProps["title"] = parent.data.title
-		elseif item.data.title then 
+		--if item.data.title == item.data.filename then
+			--docProps["title"] = parent.data.title
+		--else
+		if item.data.title then 
 			docProps["title"] = item.data.title 
 		end
+		--print(JSON.encode(parent.data))
 --		if parent.meta.creatorSummary ~= "" then docProps["authors"] = parent.meta.creatorSummary end
 		if parent.data.creators[1] ~= nil then 
 			local authors = {}
@@ -1985,12 +1987,18 @@ function API.getAttachmentInfo(item)
 		if parent.data.abstractNote ~= "" then docProps["description"] = parent.data.abstractNote end
 		if parent.data.language ~= "" then docProps["language"] = parent.data.language end
 		if parent.data.series ~= "" then docProps["series"] = parent.data.series end
-		if parent.data.tags[1] ~= nil then docProps["keywords"] = table.concat(parent.data.tags, ", ") end
+		if parent.data.tags[1] ~= nil then 
+			local tags = {}
+			for _, v in ipairs(parent.data.tags) do
+				table.insert(tags, v.tag)
+			end
+			docProps["keywords"] = table.concat(tags, ", ") 
+		end
 
 	elseif item.data.title then 
 		docProps["title"] = item.data.title 
 	end
-	--print(JSON.encode(docProps))
+	print(JSON.encode(docProps))
     customSettings:saveSetting("custom_props", docProps)
     customSettings:flushCustomMetadata(filePath)
 
