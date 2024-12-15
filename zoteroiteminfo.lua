@@ -31,10 +31,18 @@ local itemInfo = WidgetContainer:extend{
         --"itemType",
         "title",
         "creators",
+        "bookTitle",
         "publicationTitle",
+        "proceedingsTitle",
+        "conferenceName",
         "volume",
+        "issue",
+        "series",
+        "edition",
+        "publisher",
         "pages",
         "date",
+        "ISBN",
         "DOI",
         "tags",
         --"abstractNote",
@@ -42,18 +50,68 @@ local itemInfo = WidgetContainer:extend{
     prop_text = {
         itemType         = _("Type:"),
         title            = _("Title:"),
-        creators          = _("Author(s):"),
+        creators         = _("Author(s):"),
+        bookTitle        = _("Book title:"),
         publicationTitle = _("Publication:"),
+        proceedingsTitle = _("Proceedings:"),
+        conferenceName   = _("Conference:"),
         volume           = _("Volume:"),
+        issue            = _("Issue:"),
+        series           = _("Series:"),
+        edition          = _("Edition:"),
+        publisher        = _("Publisher:"),
         pages            = _("Pages:"),
         date             = _("Date:"),
+        ISBN             = _("ISBN:"),
         language         = _("Language:"),
-        DOI             = _("DOI:"),
+        DOI              = _("DOI:"),
         tags             = _("Tags:"),
         abstractNote     = _("Abstract:"),
     },
 }
 
+local itemTypeStrings = {
+	annotation          = _("Annotation"),
+	artwork             = _("Artwork"),
+	attachment          = _("Attachment"),
+	audioRecording      = _("Audio Recording"),
+	bill                = _("Bill"),
+	blogPost            = _("Blog Post"),
+	book                = _("Book"),
+	bookSection         = _("Book Section"),
+	case                = _("Case"),
+	computerProgram     = _("Computer Program"),
+	conferencePaper     = _("Conference Paper"),
+	dictionaryEntry     = _("Dictionary Entry"),
+	document            = _("Document"),
+	email               = _("Email"),
+	encyclopediaArticle = _("Encyclopedia Article"),
+	film                = _("Film"),
+	forumPost           = _("Forum Post"),
+	hearing             = _("Hearing"),
+	instantMessage      = _("Instant Message"),
+	interview           = _("Interview"),
+	journalArticle      = _("Journal Article"),
+	letter              = _("Letter"),
+	magazineArticle     = _("Magazine Article"),
+	manuscript          = _("Manuscript"),
+	map                 = _("Map"),
+	newspaperArticle    = _("Newspaper Article"),
+	note                = _("Note"),
+	patent              = _("Patent"),
+	podcast             = _("Podcast"),
+	preprint            = _("Preprint"),
+	presentation        = _("Presentation"),
+	radioBroadcast      = _("Radio Broadcast"),
+	report              = _("Report"),
+	statute             = _("Statute"),
+	thesis              = _("Thesis"),
+	tvBroadcast         = _("TV Broadcast"),
+	videoRecording      = _("Video Recording"),
+	webpage             = _("Webpage"),
+	dataset             = _("Dataset"),
+	standard            = _("Standard");
+}
 --[[
 function itemInfo:init()
 	print("InfoItem:init ", self.document)
@@ -61,7 +119,7 @@ function itemInfo:init()
         self.ui.menu:registerToMainMenu(self)
     end
 end
-]]
+--]]
 
 function itemInfo:addToMainMenu(menu_items)
     menu_items.book_info = {
@@ -101,65 +159,13 @@ function itemInfo:show(itemData, attachments)
     self.prop_updated = nil
     self.summary_updated = nil
     local kv_pairs = {}
-    print("In itemInfo :", itemData["title"])
-	print(#attachments, " attachments")
---[[
-    -- File section
-    local has_sidecar = type(doc_settings_or_file) == "table"
-    local file = has_sidecar and doc_settings_or_file:readSetting("doc_path") or doc_settings_or_file
-    self.is_current_doc = self.document and self.document.file == file
-    if not has_sidecar and self.is_current_doc then
-        doc_settings_or_file = self.ui.doc_settings
-        has_sidecar = true
-    end
-    if not has_sidecar and DocSettings:hasSidecarFile(file) then
-        doc_settings_or_file = DocSettings:open(file)
-        has_sidecar = true
-    end
-    local folder, filename = util.splitFilePathName(file)
-    local __, filetype = filemanagerutil.splitFileNameType(filename)
-    local attr = lfs.attributes(file)
-    local file_size = attr.size or 0
-    local size_f = util.getFriendlySize(file_size)
-    local size_b = util.getFormattedSize(file_size)
-    table.insert(kv_pairs, { _("Filename:"), BD.filename(filename) })
-    table.insert(kv_pairs, { _("Format:"), filetype:upper() })
-    table.insert(kv_pairs, { _("Size:"), string.format("%s (%s bytes)", size_f, size_b) })
-    table.insert(kv_pairs, { _("File date:"), os.date("%Y-%m-%d %H:%M:%S", attr.modification) })
-    table.insert(kv_pairs, { _("Folder:"), BD.dirpath(filemanagerutil.abbreviate(folder)), separator = true })
-]]
+--    print("In itemInfo :", itemData["title"])
+--	print(#attachments, " attachments")
 
-    -- Book section
-    -- book_props may be provided if caller already has them available
-    -- but it may lack "pages", that we may get from sidecar file
---[[    if not itemData or not itemData.pages then
-        itemData = itemInfo.getDocProps(file, itemData)
-    end
-]]
---[[
-    -- cover image
-    self.custom_book_cover = DocSettings:findCustomCoverFile(file)
-    local key_text = self.prop_text["cover"]
-    if self.custom_book_cover then
-        key_text = "\u{F040} " .. key_text
-    end
-    table.insert(kv_pairs, { key_text, _("Tap to display"),
-        callback = function()
-            self:onShowBookCover(file)
-        end,
-        hold_callback = function()
-            self:showCustomDialog(file, book_props)
-        end,
-        separator = true,
-    })
-]]
-    -- metadata
     local type = itemData.itemType
-	if type == "journalArticle" then
-		self.title = "Journal article"
-	elseif type == "book" then
-		self.title = "Book"	
-	-- TO-DO: add other itemTypes
+	if type then
+		print(type, itemTypeStrings[type])
+		self.title = itemTypeStrings[type] or "Item information"
 	end
     
     local key_text
@@ -176,13 +182,16 @@ function itemInfo:show(itemData, attachments)
             prop = self.formatCreators(prop)
         elseif prop_key == "tags" then
             prop = self.formatTags(prop)
-        elseif prop_key == "abstractNote" then
+--[[ Moved further down       
+			elseif prop_key == "abstractNote" then
             -- Description may (often in EPUB, but not always) or may not (rarely in PDF) be HTML
             prop = util.htmlToPlainTextIfHtml(prop)
             callback = function() -- proper text_type in TextViewer
                 self:showBookProp("abstractNote", prop)
             end
+--]]
         end
+        -- Only add keys if its value has been set
         if prop ~= nil then
 			key_text = self.prop_text[prop_key]
 			table.insert(kv_pairs, { key_text, prop,
@@ -190,9 +199,8 @@ function itemInfo:show(itemData, attachments)
 			})
 		end
     end
-    -- pages
-    --table.insert(kv_pairs, { self.prop_text["pages"], itemData["pages"] or _("N/A"), separator = true })
-	-- abstract
+
+	-- Abstract
 	local abstract = itemData.abstractNote
 	if abstract then
 		-- Description may (often in EPUB, but not always) or may not (rarely in PDF) be HTML
@@ -205,7 +213,16 @@ function itemInfo:show(itemData, attachments)
 			callback = callback, separator = true
 		})
 	end
-
+	
+	-- Attachments
+	if #attachments then
+		table.insert(kv_pairs, { "Attachents:", "", callback = callback	})
+	end
+	for i, v in ipairs(attachments) do
+		key_text = i..":"
+		table.insert(kv_pairs, { key_text, v.title, callback = callback	})
+	end
+	
     local KeyValuePage = require("ui/widget/keyvaluepage")
     self.kvp_widget = KeyValuePage:new{
         title = self.title,
