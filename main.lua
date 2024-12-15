@@ -14,6 +14,7 @@ local Menu = require("ui/widget/menu")
 local Geom = require("ui/geometry")
 local _ = require("gettext")
 local ZoteroAPI = require("zoteroapi")
+local itemInfoViewer = require("zoteroiteminfo")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
 local ButtonDialog = require("ui/widget/buttondialog")
 local lfs = require("libs/libkoreader-lfs")
@@ -155,9 +156,13 @@ end
 
 function ZoteroBrowser:onMenuHold(item)
     if item.type == "item" then
-        table.insert(self.paths, item.key)
-        table.insert(self.keys, item.key)
-        self:displayAttachments(item.key)
+        --table.insert(self.paths, item.key)
+        --table.insert(self.keys, item.key)
+        --self:displayAttachments(item.key)
+        local itemDetails = ZoteroAPI.getItem(item.key)
+        --print(JSON.encode(itemDetails.data))
+        local itemInfo = itemInfoViewer:new()
+        itemInfo:show(itemDetails.data)
     elseif item.type == "collection" then
         local is_offline_enabled = ZoteroAPI.isOfflineCollection(item.key)
         local button_label = "▢  Download this collection during sync"
