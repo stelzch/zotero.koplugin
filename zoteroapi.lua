@@ -2002,6 +2002,9 @@ function API.getAttachmentInfo(item)
 	end
 	--print(JSON.encode(docProps))
     customSettings:saveSetting("custom_props", docProps)
+	-- Need this, otherwise KOReader crashes when trying to edit the custom values
+	-- Should set this properly, but this will do to stop crashes...
+    customSettings:saveSetting("doc_props", docProps)
     customSettings:flushCustomMetadata(filePath)
 
 end
