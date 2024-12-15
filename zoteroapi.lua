@@ -1283,7 +1283,7 @@ function API.getItemWithAttachments(key)
 		item.attachments = attachments
     end
 	stmt:close()
-
+	--print(JSON.encode(item.data))
     return item
 end
 

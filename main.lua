@@ -160,7 +160,6 @@ function ZoteroBrowser:onMenuHold(item)
         table.insert(self.keys, item.key)
         --self:displayAttachments(item.key)
         local itemDetails = ZoteroAPI.getItemWithAttachments(item.key)
-        --print(JSON.encode(itemDetails.data))
         local itemInfo = itemInfoViewer:new()
         itemInfo:show(itemDetails.data, itemDetails.attachments)
     elseif item.type == "collection" then
