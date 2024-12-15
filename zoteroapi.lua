@@ -596,6 +596,7 @@ function API.init(zotero_dir)
 	logger.info("Zotero plugin version: "..API.version)
 	
 	--API.scanStorage()
+	--API.getItemWithAttachments("H26YYGWN")
 end
 
 function API.getStats()
@@ -1249,6 +1250,43 @@ function API.getItem(key)
         return JSON.decode(result[1][1])
     end
 end
+
+function API.getItemWithAttachments(key)
+    
+    local item
+    local db = API.openDB()
+    -- get item first
+    local stmt = db:prepare(ZOTERO_GET_ITEM)
+    stmt:bind1(1,key)
+
+    local result, nr = stmt:resultset()
+
+    if nr > 0 then
+        item = JSON.decode(result[1][1])
+
+		local stmtAttachments = db:prepare(ZOTERO_GET_ITEM_ATTACHMENTS)
+		stmtAttachments:bind1(1, key)
+
+		result, nr = stmtAttachments:resultset()
+		stmtAttachments:close()
+
+		local attachments = {}
+
+		for i=1,nr do
+			stmt:reset():bind1(1,result[1][i])
+			local childResult, cnr = stmt:resultset()
+			if cnr == 1 then 
+				table.insert(attachments, JSON.decode(childResult[1][1]).data)
+			end
+		end
+		-- add an attachments field to item:
+		item.attachments = attachments
+    end
+	stmt:close()
+
+    return item
+end
+
 
 function API.getItemAttachments(key)
     local db = API.openDB()

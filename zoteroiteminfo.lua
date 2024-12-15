@@ -37,7 +37,7 @@ local itemInfo = WidgetContainer:extend{
         "date",
         "DOI",
         "tags",
-        "abstractNote",
+        --"abstractNote",
     },
     prop_text = {
         itemType         = _("Type:"),
@@ -97,11 +97,12 @@ function itemInfo.formatTags(tagArray)
 end
 		
 -- Shows book information.
-function itemInfo:show(itemData)
+function itemInfo:show(itemData, attachments)
     self.prop_updated = nil
     self.summary_updated = nil
     local kv_pairs = {}
     print("In itemInfo :", itemData["title"])
+	print(#attachments, " attachments")
 --[[
     -- File section
     local has_sidecar = type(doc_settings_or_file) == "table"
@@ -153,6 +154,15 @@ function itemInfo:show(itemData)
     })
 ]]
     -- metadata
+    local type = itemData.itemType
+	if type == "journalArticle" then
+		self.title = "Journal article"
+	elseif type == "book" then
+		self.title = "Book"	
+	-- TO-DO: add other itemTypes
+	end
+    
+    local key_text
     local values_lang, callback
     for _i, prop_key in ipairs(self.props) do
         local prop = itemData[prop_key]
@@ -182,6 +192,19 @@ function itemInfo:show(itemData)
     end
     -- pages
     --table.insert(kv_pairs, { self.prop_text["pages"], itemData["pages"] or _("N/A"), separator = true })
+	-- abstract
+	local abstract = itemData.abstractNote
+	if abstract then
+		-- Description may (often in EPUB, but not always) or may not (rarely in PDF) be HTML
+		abstract = util.htmlToPlainTextIfHtml(abstract)
+		local callback = function() -- proper text_type in TextViewer
+			self:showBookProp("abstractNote", abstract)
+		end
+		key_text = self.prop_text.abstractNote
+		table.insert(kv_pairs, { key_text, abstract,
+			callback = callback, separator = true
+		})
+	end
 
     local KeyValuePage = require("ui/widget/keyvaluepage")
     self.kvp_widget = KeyValuePage:new{
