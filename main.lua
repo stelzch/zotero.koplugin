@@ -156,13 +156,13 @@ end
 
 function ZoteroBrowser:onMenuHold(item)
     if item.type == "item" then
-        --table.insert(self.paths, item.key)
-        --table.insert(self.keys, item.key)
+        table.insert(self.paths, item.key)
+        table.insert(self.keys, item.key)
         --self:displayAttachments(item.key)
-        local itemDetails = ZoteroAPI.getItem(item.key)
+        local itemDetails = ZoteroAPI.getItemWithAttachments(item.key)
         --print(JSON.encode(itemDetails.data))
         local itemInfo = itemInfoViewer:new()
-        itemInfo:show(itemDetails.data)
+        itemInfo:show(itemDetails.data, itemDetails.attachments)
     elseif item.type == "collection" then
         local is_offline_enabled = ZoteroAPI.isOfflineCollection(item.key)
         local button_label = "▢  Download this collection during sync"
