@@ -2,7 +2,6 @@
 This module provides a way to display item information (adapted from apps/filemanager/filemanagerbookinfo.lua)
 ]]
 
-local BD = require("ui/bidi")
 local ButtonDialog = require("ui/widget/buttondialog")
 local ConfirmBox = require("ui/widget/confirmbox")
 local Device = require("device")
@@ -112,6 +111,13 @@ local itemTypeStrings = {
 	dataset             = _("Dataset"),
 	standard            = _("Standard");
 }
+
+local mimeTypes = {
+    ["application/pdf"] = "pdf",
+	["application/epub+zip"] = "epub",
+    ["text/html"] = "html" ,
+}
+
 --[[
 function itemInfo:init()
 	print("InfoItem:init ", self.document)
@@ -155,7 +161,7 @@ function itemInfo.formatTags(tagArray)
 end
 		
 -- Shows book information.
-function itemInfo:show(itemData, attachments)
+function itemInfo:show(itemData, attachments, attachment_callback)
     self.prop_updated = nil
     self.summary_updated = nil
     local kv_pairs = {}
@@ -164,7 +170,7 @@ function itemInfo:show(itemData, attachments)
 
     local type = itemData.itemType
 	if type then
-		print(type, itemTypeStrings[type])
+		--print(type, itemTypeStrings[type])
 		self.title = itemTypeStrings[type] or "Item information"
 	end
     
@@ -193,6 +199,10 @@ function itemInfo:show(itemData, attachments)
         end
         -- Only add keys if its value has been set
         if prop ~= nil then
+			if prop_key == "tags" then
+				-- Separator
+				table.insert(kv_pairs, "--")
+			end
 			key_text = self.prop_text[prop_key]
 			table.insert(kv_pairs, { key_text, prop,
 				callback = callback
@@ -202,7 +212,7 @@ function itemInfo:show(itemData, attachments)
 
 	-- Abstract
 	local abstract = itemData.abstractNote
-	if abstract then
+	if abstract ~= "" then
 		-- Description may (often in EPUB, but not always) or may not (rarely in PDF) be HTML
 		abstract = util.htmlToPlainTextIfHtml(abstract)
 		local callback = function() -- proper text_type in TextViewer
@@ -212,23 +222,35 @@ function itemInfo:show(itemData, attachments)
 		table.insert(kv_pairs, { key_text, abstract,
 			callback = callback, separator = true
 		})
+    else
+		-- Separator
+		table.insert(kv_pairs, "--")
 	end
 	
 	-- Attachments
 	if #attachments then
-		table.insert(kv_pairs, { "Attachents:", "", callback = callback	})
+		table.insert(kv_pairs, { "Attachents:", "Tap to open..."	})
+		local cb 
+		for i, v in ipairs(attachments) do
+			key_text = "["..i.."] ("..mimeTypes[v.contentType].."):"
+			if attachment_callback then
+				cb = function() attachment_callback(v.key) end
+			else
+				print("No cb supplied?")
+				cb = nil
+			end
+			table.insert(kv_pairs, { key_text, v.title, callback = cb	})
+		end
 	end
-	for i, v in ipairs(attachments) do
-		key_text = i..":"
-		table.insert(kv_pairs, { key_text, v.title, callback = callback	})
-	end
-	
+
+
     local KeyValuePage = require("ui/widget/keyvaluepage")
     self.kvp_widget = KeyValuePage:new{
         title = self.title,
         value_overflow_align = "right",
         kv_pairs = kv_pairs,
         values_lang = values_lang,
+        single_page = true,
     }
     UIManager:show(self.kvp_widget)
 end
