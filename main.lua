@@ -161,7 +161,22 @@ function ZoteroBrowser:onMenuHold(item)
         --self:displayAttachments(item.key)
         local itemDetails = ZoteroAPI.getItemWithAttachments(item.key)
         local itemInfo = itemInfoViewer:new()
-        itemInfo:show(itemDetails.data, itemDetails.attachments)
+        itemInfo:show(itemDetails.data, itemDetails.attachments, function(key)
+			local full_path, e = ZoteroAPI.downloadAndGetPath(key)
+			if e ~= nil or full_path == nil then
+				local b = InfoMessage:new{
+					text = _("Could not open file.") .. e,
+					timeout = 5,
+					icon = "notice-warning"
+				}
+				UIManager:show(b)
+			else
+				assert(full_path ~= nil)
+				local ReaderUI = require("apps/reader/readerui")
+				self.close_callback()
+				ReaderUI:showReader(full_path)
+			end
+		end)
     elseif item.type == "collection" then
         local is_offline_enabled = ZoteroAPI.isOfflineCollection(item.key)
         local button_label = "▢  Download this collection during sync"
