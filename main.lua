@@ -156,8 +156,8 @@ end
 
 function ZoteroBrowser:onMenuHold(item)
     if item.type == "item" then
-        table.insert(self.paths, item.key)
-        table.insert(self.keys, item.key)
+        --table.insert(self.paths, item.key)
+        --table.insert(self.keys, item.key)
         --self:displayAttachments(item.key)
         local itemDetails = ZoteroAPI.getItemWithAttachments(item.key)
         local itemInfo = itemInfoViewer:new()

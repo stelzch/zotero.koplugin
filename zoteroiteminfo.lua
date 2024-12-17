@@ -176,6 +176,7 @@ function itemInfo:show(itemData, attachments, attachment_callback)
     
     local key_text
     local values_lang, callback
+    local sep = 0  -- Count separators
     for _i, prop_key in ipairs(self.props) do
         local prop = itemData[prop_key]
         if prop == nil or prop == "" then
@@ -202,6 +203,7 @@ function itemInfo:show(itemData, attachments, attachment_callback)
 			if prop_key == "tags" then
 				-- Separator
 				table.insert(kv_pairs, "--")
+				sep = sep + 1
 			end
 			key_text = self.prop_text[prop_key]
 			table.insert(kv_pairs, { key_text, prop,
@@ -213,6 +215,10 @@ function itemInfo:show(itemData, attachments, attachment_callback)
 	-- Abstract
 	local abstract = itemData.abstractNote
 	if abstract ~= "" then
+		if sep == 0 then
+			table.insert(kv_pairs, "--")
+			sep = sep + 1
+		end
 		-- Description may (often in EPUB, but not always) or may not (rarely in PDF) be HTML
 		abstract = util.htmlToPlainTextIfHtml(abstract)
 		local callback = function() -- proper text_type in TextViewer
@@ -228,7 +234,7 @@ function itemInfo:show(itemData, attachments, attachment_callback)
 	end
 	
 	-- Attachments
-	if #attachments then
+	if #attachments > 0 then
 		table.insert(kv_pairs, { "Attachents:", "Tap to open..."	})
 		local cb 
 		for i, v in ipairs(attachments) do
