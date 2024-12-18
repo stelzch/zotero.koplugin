@@ -283,7 +283,8 @@ function Annotations.createAnnotations(file_path, key, creation_callback)
     end
 
     for i = 1,#k_annotations do
-        if k_annotations[i].zoteroKey == nil then
+        if (k_annotations[i].zoteroKey == nil) and (k_annotations[i].drawer ~= nil) then
+            -- at some point should figure out what to do with annotations where k_annotations[i].drawer == 0
             local pageno = k_annotations[i].pageno
             local page_height = page_dimensions[pageno][2]
             local a = Annotations.convertKOReaderToZotero(k_annotations[i], page_height, key)
