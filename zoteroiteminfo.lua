@@ -161,7 +161,9 @@ function itemInfo.formatTags(tagArray)
 end
 		
 -- Shows book information.
-function itemInfo:show(itemData, attachments, attachment_callback)
+function itemInfo:show(itemDetails, attachment_callback)
+	local itemData = itemDetails.data
+	local attachments = itemDetails.attachments
     self.prop_updated = nil
     self.summary_updated = nil
     local kv_pairs = {}
@@ -235,7 +237,7 @@ function itemInfo:show(itemData, attachments, attachment_callback)
 	
 	-- Attachments
 	if #attachments > 0 then
-		table.insert(kv_pairs, { "Attachents:", "Tap to open..."	})
+		table.insert(kv_pairs, { "Attachents:", "...tap to open..."	})
 		local cb 
 		for i, v in ipairs(attachments) do
 			key_text = "["..i.."] ("..mimeTypes[v.contentType].."):"
@@ -245,7 +247,13 @@ function itemInfo:show(itemData, attachments, attachment_callback)
 				print("No cb supplied?")
 				cb = nil
 			end
-			table.insert(kv_pairs, { key_text, v.title, callback = cb	})
+			local vtext
+			if 	v.syncedVersion == v.version then
+				vtext = "✓ "..v.title
+			else
+				vtext = v.title
+			end
+			table.insert(kv_pairs, { key_text, vtext, callback = cb	})
 		end
 	end
 
