@@ -1276,7 +1276,12 @@ function API.getItemWithAttachments(key)
 			stmt:reset():bind1(1,result[1][i])
 			local childResult, cnr = stmt:resultset()
 			if cnr == 1 then 
-				table.insert(attachments, JSON.decode(childResult[1][1]).data)
+				local attach = JSON.decode(childResult[1][1]).data
+				-- check whether its synced
+				local syncedVersion, lastSync = API.getAttachmentVersion(attach.key)
+				attach.syncedVersion = syncedVersion
+				attach.lastSync = lastSync
+				table.insert(attachments, attach)
 			end
 		end
 		-- add an attachments field to item:
@@ -1580,6 +1585,7 @@ function API.getAttachmentVersion(key)
     if nr == 0 then
         return nil
     else
+		-- return syncedVersion, lastSync, version, items.itemID
         return tonumber(result[1][1]), tonumber(result[2][1]), tonumber(result[3][1]), tonumber(result[4][1])
     end
 

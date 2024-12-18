@@ -161,7 +161,7 @@ function ZoteroBrowser:onMenuHold(item)
         --self:displayAttachments(item.key)
         local itemDetails = ZoteroAPI.getItemWithAttachments(item.key)
         local itemInfo = itemInfoViewer:new()
-        itemInfo:show(itemDetails.data, itemDetails.attachments, function(key)
+        itemInfo:show(itemDetails, function(key)
 			local full_path, e = ZoteroAPI.downloadAndGetPath(key)
 			if e ~= nil or full_path == nil then
 				local b = InfoMessage:new{
