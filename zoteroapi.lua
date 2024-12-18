@@ -2028,7 +2028,8 @@ function API.getAttachmentInfo(item)
 					table.insert(authors, v.firstName.." "..v.lastName)
 				end
 			end
-			docProps["authors"] = table.concat(authors, ", ")
+			-- use \n to separate items, as KOReader seems to then split them up properly
+			docProps["authors"] = table.concat(authors, "\n")
 		end
 		if parent.data.abstractNote ~= "" then docProps["description"] = parent.data.abstractNote end
 		if parent.data.language ~= "" then docProps["language"] = parent.data.language end
@@ -2038,7 +2039,7 @@ function API.getAttachmentInfo(item)
 			for _, v in ipairs(parent.data.tags) do
 				table.insert(tags, v.tag)
 			end
-			docProps["keywords"] = table.concat(tags, ", ") 
+			docProps["keywords"] = table.concat(tags, "\n") 
 		end
 
 	elseif item.data.title then 
