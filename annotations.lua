@@ -230,7 +230,7 @@ function Annotations.convertZoteroToKOReader(annotation, page_height)
     -- Convert Zotero time stamp to the format used by KOReader
     -- e.g. "2024-09-24T18:13:49Z" to "2024-09-24 18:13:49"
     local koAnnotation = {
-			["color"] = Z2K_COLORS[annotation.annotationColor] or defaultKColor,
+			["color"] = Z2K_COLORS[annotation.data.annotationColor] or defaultKColor,
             ["datetime"] = string.sub(string.gsub(annotation.data.dateModified, "T", " "), 1, -2), -- convert format
             ["drawer"] = Z2K_STYLE[annotation.data.annotationType] or "lighten",
             ["page"] = page,
