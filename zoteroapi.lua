@@ -1139,6 +1139,14 @@ function API.syncAllItems(progress_callback)
 		end
 	end
 	
+	--[[
+	-- try downloading My publications:
+	local page_url = API.userLibraryURL.."/publications/items"
+	print(page_url)
+	local r, e =  API.getZoteroData(page_url)
+	print(JSON.encode(r))
+	--]]
+	
 	local r, e = API.fetchZoteroCollections(since, progress_callback)
     if e ~= nil then return e end
 		
