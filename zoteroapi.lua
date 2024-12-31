@@ -466,7 +466,7 @@ SELECT
 	attachments,
 	annotations
 FROM
-	(
+	((
 	SELECT
 		COUNT(collectionID) AS colls
 	FROM
@@ -486,8 +486,7 @@ FROM
 		COUNT(itemID) AS annotations
 	FROM
 		itemAnnotations
-	)
-	);
+	));
 ]]
 
 local function file_exists(path)
@@ -602,15 +601,18 @@ end
 function API.getStats()
     local db = API.openDB()
 
-	--local c, i, a, n = db:rowexec(ZOTERO_DB_STATS)
-	local c = tonumber(db:rowexec("SELECT COUNT(*) FROM collections;"))
-	local i = tonumber(db:rowexec("SELECT COUNT(*) FROM items;"))
-	local a = tonumber(db:rowexec("SELECT COUNT(*) FROM itemAttachments;"))
-	local n = tonumber(db:rowexec("SELECT COUNT(*) FROM itemAnnotations;"))
-	local lastsync = os.date("%Y-%m-%d %X",tonumber(db:rowexec("SELECT lastSync FROM libraries WHERE libraryID = 1;")))
-	local stats = { ["libVersion"] = API.getUserLibraryVersion(), ["lastSync"] = lastsync, ["collections"] = c, ["items"] = i, ["attachments"] = a, ["annotations"] = n }
-	--logger.info(JSON.encode(stats))
-	
+	local c, i, a, n = db:rowexec(ZOTERO_DB_STATS)
+	local sy, name = db:rowexec("SELECT lastSync, name FROM libraries WHERE libraryID = 1;")
+	local lastsync = os.date("%Y-%m-%d %X",tonumber(sy))
+	local stats = { ["libVersion"] = API.getUserLibraryVersion(), 
+					["name"] = name,
+					["lastSync"] = lastsync, 
+					["collections"] = tonumber(c), 
+					["items"] = tonumber(i), 
+					["attachments"] = tonumber(a), 
+					["annotations"] = tonumber(n) 
+				  }
+	--logger.info(JSON.encode(stats))	
     return stats
 end
 
@@ -1142,7 +1144,8 @@ function API.syncAllItems(progress_callback)
 	----[[
 	-- try downloading My publications:
 	local page_url = API.userLibraryURL.."/publications/items?format=versions"
-	print(page_url)
+	--page_url = API.userLibraryURL.."/searches"
+	--print(page_url)
 	local r, e =  API.getZoteroData(page_url)
 	--print(JSON.encode(r))
 	if r ~= nil then
