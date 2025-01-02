@@ -42,6 +42,8 @@ local ZoteroBrowser = Menu:extend{
     title_bar_left_icon = "appbar.search",
     covers_full_screen = true,
     return_arrow_propagation = false,
+    -- Slightly ugly using the option below, but better than truncated single line:
+    multilines_show_more_text = true,
 }
 
 
