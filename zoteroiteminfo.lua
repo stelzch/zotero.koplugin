@@ -2,27 +2,11 @@
 This module provides a way to display item information (adapted from apps/filemanager/filemanagerbookinfo.lua)
 --]]
 
-local ButtonDialog = require("ui/widget/buttondialog")
-local ConfirmBox = require("ui/widget/confirmbox")
-local Device = require("device")
-local DocSettings = require("docsettings")
-local Document = require("document/document")
-local DocumentRegistry = require("document/documentregistry")
-local Event = require("ui/event")
-local InfoMessage = require("ui/widget/infomessage")
-local InputDialog = require("ui/widget/inputdialog")
-local Notification = require("ui/widget/notification")
 local TextViewer = require("ui/widget/textviewer")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local ffiUtil = require("ffi/util")
-local filemanagerutil = require("apps/filemanager/filemanagerutil")
-local lfs = require("libs/libkoreader-lfs")
 local util = require("util")
 local _ = require("gettext")
-local N_ = _.ngettext
-local Screen = Device.screen
-local T = ffiUtil.template
 
 local itemInfo = WidgetContainer:extend{
     title = _("Item information"),
