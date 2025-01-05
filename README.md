@@ -9,6 +9,7 @@ This addon for [KOReader](https://github.com/koreader/koreader) allows you to vi
 
 ## Features
 * Synchronization via Zotero Web API
+* Display main bibliographical information for items
 * Open attached PDF/EPUB/HTML files
 * Download Zotero annotations of pdf files
 * Upload new KOReader annotations on pdf files to Zotero
@@ -18,8 +19,9 @@ This addon for [KOReader](https://github.com/koreader/koreader) allows you to vi
 
 ### Limitations
 
-* Currently, this plugin _only supports uploading new annotations_ made with KOReader to Zotero. Changes and deletions made in KOReader will not be synchronized. But changes made in Zotero will be synchronised.
 * Annotations only work for pdf files, not epub or other formats
+* Only text highlights (and associated text notes) are currently supported
+* This plugin _only supports uploading new annotations_ made with KOReader to Zotero. Changes and deletions made in KOReader will not be synchronized. But changes made in Zotero will be synchronised.
 * Search function currently quite limited, no real access to full author lists, DOIs, tags, etc.
 
 
@@ -50,9 +52,9 @@ When opening an item from the Zotero brower it will also check its Zotero annota
  
 You can also **long-press** on items. The action depends on what type of item is selected:
 - Collection: Show a dialog which allows you to set this collection as an offline collection. 
-- Item: Show a list of *all* (supported) attachments of this item
+- Item: Show bibliographical information for the item as well as abstract and tags and a list of *all* (supported) attachments of this item
 
-You can **search** the databse by clicking on the magnifying glass icon in the top left corner. 
+You can **search** the database by clicking on the magnifying glass icon in the top left corner. 
 
 **Note:** you can associate this 'Browse' action with a gesture by going to
 'Top Menu -> Settings (cogwheel) -> Taps and gestures -> Gesture manager'
@@ -74,6 +76,8 @@ In detail 'synchronize' entails
 - Re-analyze local items will go through all the items in the local database and re-check which ones have supported attachments, are attachments themselves or are relevant annotations. Depending on your collection size this can take quite some time, but is still much faster then a full re-sync and does not need any internet connection.
 
 - Resync entire collection: only meant as a last resort as this will delete the complete local database and resynchronize everything from the zotero server.
+
+- Re-scan the local storage to check for downloaded attachment files. Useful after resyncing the complete library, as this will loose info about local items in the database.
 
 ### Settings
 
