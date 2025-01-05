@@ -53,6 +53,7 @@ The first entry will be a 'fake' root collection, which is used for all items wh
  5. key: collection key as provided by Zotero API
  6. version: version of the collection  
   
+All the info on the collection is contained in this table, so there is no need to keep the 'raw' json response anywhere...
   
 	CREATE TABLE IF NOT EXISTS collections (  
 		collectionID INTEGER PRIMARY KEY,  
@@ -97,7 +98,7 @@ Synced column is currently not used at all.
 Item information in the format returned by the Zotero API. 
 `value` contains the JSON object for the item with `itemID`. 
 To save some space the `library` and `links` fields are deleted first.
-In principle only the `data` field would be all that is needed, but for now it also keeps `meta`.
+In principle the `data` field would be all that is needed, but for now it also keeps `meta`.
 
 	CREATE TABLE IF NOT EXISTS itemData (
 		itemID INTEGER PRIMARY KEY,    
@@ -198,7 +199,7 @@ Depending on your KOReader configuration there might be subfolder with the exten
 The sidecar file `metadata.pdf.lua` is where KOReader keeps its metadata for the item, such as number of pages, last page viewed and reading statistics.
 
 The most relevant entry for our zotero plugin is `annotations`, which catalogues all the file annotations KOReader knowns about. 
-The Zotero plugin hijacks the sidcar file to also some of the metadata it needs to work smoothly.
+The Zotero plugin hijacks the sidcar file to also store some of the metadata it needs to work smoothly.
 It adds the following top level entries:
 1. zoteroLibVersion: Zotero library version at the last time annotations where syncronised with this sidecar file.
 2. page_height: page height in points, which is needed to convert coordinates between KOReader and Zotero annotations. Currently simply assumes that all pages have the same height...
