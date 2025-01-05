@@ -466,7 +466,7 @@ SELECT
 	attachments,
 	annotations
 FROM
-	(
+	((
 	SELECT
 		COUNT(collectionID) AS colls
 	FROM
@@ -486,8 +486,7 @@ FROM
 		COUNT(itemID) AS annotations
 	FROM
 		itemAnnotations
-	)
-	);
+	));
 ]]
 
 local function file_exists(path)
@@ -594,20 +593,26 @@ function API.init(zotero_dir)
 	local ts = lfs.attributes(path, "modification")
 	API.version = API.version.." ("..os.date("%Y-%m-%d %X",ts)..")" 
 	logger.info("Zotero plugin version: "..API.version)
+	
+	--API.scanStorage()
+	--API.getItemWithAttachments("H26YYGWN")
 end
 
 function API.getStats()
     local db = API.openDB()
 
-	--local c, i, a, n = db:rowexec(ZOTERO_DB_STATS)
-	local c = tonumber(db:rowexec("SELECT COUNT(*) FROM collections;"))
-	local i = tonumber(db:rowexec("SELECT COUNT(*) FROM items;"))
-	local a = tonumber(db:rowexec("SELECT COUNT(*) FROM itemAttachments;"))
-	local n = tonumber(db:rowexec("SELECT COUNT(*) FROM itemAnnotations;"))
-	local lastsync = os.date("%Y-%m-%d %X",tonumber(db:rowexec("SELECT lastSync FROM libraries WHERE libraryID = 1;")))
-	local stats = { ["libVersion"] = API.getUserLibraryVersion(), ["lastSync"] = lastsync, ["collections"] = c, ["items"] = i, ["attachments"] = a, ["annotations"] = n }
-	--logger.info(JSON.encode(stats))
-	
+	local c, i, a, n = db:rowexec(ZOTERO_DB_STATS)
+	local sy, name = db:rowexec("SELECT lastSync, name FROM libraries WHERE libraryID = 1;")
+	local lastsync = os.date("%Y-%m-%d %X",tonumber(sy))
+	local stats = { ["libVersion"] = API.getUserLibraryVersion(), 
+					["name"] = name,
+					["lastSync"] = lastsync, 
+					["collections"] = tonumber(c), 
+					["items"] = tonumber(i), 
+					["attachments"] = tonumber(a), 
+					["annotations"] = tonumber(n) 
+				  }
+	--logger.info(JSON.encode(stats))	
     return stats
 end
 
@@ -1136,6 +1141,24 @@ function API.syncAllItems(progress_callback)
 		end
 	end
 	
+	--[[
+	-- try downloading My publications:
+	local page_url = API.userLibraryURL.."/publications/items?format=versions"
+	--page_url = API.userLibraryURL.."/searches"
+	--print(page_url)
+	local r, e =  API.getZoteroData(page_url)
+	--print(JSON.encode(r))
+	if r ~= nil then
+		local cnt = 0
+		for key, _ in pairs(r) do
+			cnt = cnt + 1
+		end
+		print(cnt, "publications.")
+	else
+		print("No publications.")
+	end
+	--]]
+	
 	local r, e = API.fetchZoteroCollections(since, progress_callback)
     if e ~= nil then return e end
 		
@@ -1248,6 +1271,48 @@ function API.getItem(key)
     end
 end
 
+function API.getItemWithAttachments(key)
+    
+    local item
+    local db = API.openDB()
+    -- get item first
+    local stmt = db:prepare(ZOTERO_GET_ITEM)
+    stmt:bind1(1,key)
+
+    local result, nr = stmt:resultset()
+
+    if nr > 0 then
+        item = JSON.decode(result[1][1])
+
+		local stmtAttachments = db:prepare(ZOTERO_GET_ITEM_ATTACHMENTS)
+		stmtAttachments:bind1(1, key)
+
+		result, nr = stmtAttachments:resultset()
+		stmtAttachments:close()
+
+		local attachments = {}
+
+		for i=1,nr do
+			stmt:reset():bind1(1,result[1][i])
+			local childResult, cnr = stmt:resultset()
+			if cnr == 1 then 
+				local attach = JSON.decode(childResult[1][1]).data
+				-- check whether its synced
+				local syncedVersion, lastSync = API.getAttachmentVersion(attach.key)
+				attach.syncedVersion = syncedVersion
+				attach.lastSync = lastSync
+				table.insert(attachments, attach)
+			end
+		end
+		-- add an attachments field to item:
+		item.attachments = attachments
+    end
+	stmt:close()
+	--print(JSON.encode(item))
+    return item
+end
+
+
 function API.getItemAttachments(key)
     local db = API.openDB()
     local stmt = db:prepare(ZOTERO_GET_ITEM_ATTACHMENTS)
@@ -1300,6 +1365,8 @@ function API.downloadAndGetPath(key, download_callback)
 
     local downloadRequired = true
     
+    API.getAttachmentInfo(item)
+    
     local targetDir, targetPath = API.getDirAndPath(item)
 	local file_ts = lfs.attributes(targetPath, "modification")
 	if file_ts then  -- file already exists locally
@@ -1346,6 +1413,12 @@ function API.downloadAndGetPath(key, download_callback)
 				return nil, errormsg
 			end
 		end
+		-- Make sure libVersion is added to metadata for non-pdf files...
+		if item.data.contentType ~= SUPPORTED_MEDIA_TYPES[1] then
+			local docSettings = DocSettings:open(targetPath)    
+			docSettings:saveSetting("zoteroLibVersion", API.getUserLibraryVersion())
+			docSettings:flush()
+		end
 	end
 	
 	-- Check whether there are any annotations that need to be attached and save library version to sdr file 
@@ -1378,7 +1451,8 @@ function API.downloadWebDAV(key, targetDir, targetPath)
     end
 
     -- Zotero WebDAV storage packs documents inside a zipfile
-    local zip_cmd = "unzip -qq '" .. zipPath .. "' -d '" .. targetDir .. "'"
+    -- Options: -qq : very quietly; -o : overwrite without prompting
+    local zip_cmd = "unzip -qq -o '" .. zipPath .. "' -d '" .. targetDir .. "'"
     logger.dbg("Zotero: unzipping with " .. zip_cmd)
     local zip_result = os.execute(zip_cmd)
 
@@ -1531,6 +1605,7 @@ function API.getAttachmentVersion(key)
     if nr == 0 then
         return nil
     else
+		-- return syncedVersion, lastSync, version, items.itemID
         return tonumber(result[1][1]), tonumber(result[2][1]), tonumber(result[3][1]), tonumber(result[4][1])
     end
 
@@ -1697,6 +1772,51 @@ function getPageDimensions(filePath)
     print("Page dimensions: ", JSON.encode(pageDims))
     document:close()
     return pageDims
+end
+
+function API.scanStorage()
+	logger.info("Scanning ", API.storage_dir)
+	local extraDirs = {}
+	local zotItems = 0
+	for file in lfs.dir(API.storage_dir) do
+		--print(file)
+		if file ~= "." and file ~= ".." then
+			local f = API.storage_dir.."/"..file
+			local mode = lfs.attributes(f, "mode")
+			if mode == "directory" then
+				-- check whether this is a key in the database
+				local local_version, lastSync, itemVersion, itemID = API.getAttachmentVersion(file)
+				--logger.info("Zotero: ItemID:", itemID,", local item:",local_version, "(synced at", lastSync, "), item version:", itemVersion)
+				if itemID ~= nil then
+					local item = API.getItem(file)
+					local targetDir, targetPath = API.getDirAndPath(item)
+					local file_ts = lfs.attributes(targetPath, "modification")
+					if file_ts then  -- file exists locally
+						-- get local file version from doc settings file
+						zotItems = zotItems + 1
+						local docSettings = DocSettings:open(targetPath)    
+						local libVersionAtLastSync  = docSettings:readSetting("zoteroLibVersion", 0)
+						docSettings:close()
+						if libVersionAtLastSync >= itemVersion then
+							--logger.info("Zotero: Update db with local file version.")
+							API.setAttachmentVersion(itemID, itemVersion)
+						else
+							--logger.info("Zotero: Local file is not up-to-date.")
+							-- Set to lowest non-zero library number to make db aware that there is a local item
+							API.setAttachmentVersion(itemID, 1)
+						end	
+					end
+				else
+					table.insert(extraDirs, file)
+				end
+			end
+		end
+	end
+	logger.info("Zotero: Storage scan found", zotItems, "local attachment items.")
+	if #extraDirs then
+		logger.info("Zotero: Found", #extraDirs, "extra directories: ", unpack(extraDirs))
+	end
+	return zotItems
 end
 
 -- Sync annotations for specified item from Zotero with sdr folder
@@ -1896,6 +2016,62 @@ function API.syncItemAnnotations(item, annotation_callback)
     settings:saveSetting("libraryVersion", API.getUserLibraryVersion())
     settings:flush() 
     docSettings:flush()
+end
+
+-- Add Zotero document info to sidecar file
+function API.getAttachmentInfo(item)
+
+	local itemKey = item.key
+    local fileDir, filePath = API.getDirAndPath(item)
+
+    if filePath == nil then
+        return "Error: could not find item"
+    end
+    --print(JSON.encode(item))
+	local customSettings = DocSettings:openSettingsFile()  
+	local docProps = {}
+	if item.data.parentItem ~= nil then
+		local parent = API.getItem(item.data.parentItem)
+		--if item.data.title == item.data.filename then
+		if parent.data.title then
+			docProps["title"] = parent.data.title
+		end
+		--elseif item.data.title then 
+		--	docProps["title"] = item.data.title 
+		--end
+		--print(JSON.encode(parent.data))
+--		if parent.meta.creatorSummary ~= "" then docProps["authors"] = parent.meta.creatorSummary end
+		if parent.data.creators[1] ~= nil then 
+			local authors = {}
+			for _, v in ipairs(parent.data.creators) do
+				if v.creatorType == "author" then
+					table.insert(authors, v.firstName.." "..v.lastName)
+				end
+			end
+			-- use \n to separate items, as KOReader seems to then split them up properly
+			docProps["authors"] = table.concat(authors, "\n")
+		end
+		if parent.data.abstractNote ~= "" then docProps["description"] = parent.data.abstractNote end
+		if parent.data.language ~= "" then docProps["language"] = parent.data.language end
+		if parent.data.series ~= "" then docProps["series"] = parent.data.series end
+		if parent.data.tags[1] ~= nil then 
+			local tags = {}
+			for _, v in ipairs(parent.data.tags) do
+				table.insert(tags, v.tag)
+			end
+			docProps["keywords"] = table.concat(tags, "\n") 
+		end
+
+	elseif item.data.title then 
+		docProps["title"] = item.data.title 
+	end
+	--print(JSON.encode(docProps))
+    customSettings:saveSetting("custom_props", docProps)
+	-- Need this, otherwise KOReader crashes when trying to edit the custom values
+	-- Should set this properly, but this will do to stop crashes...
+    customSettings:saveSetting("doc_props", docProps)
+    customSettings:flushCustomMetadata(filePath)
+
 end
 
 -- Attach Zotero annotations for specified item

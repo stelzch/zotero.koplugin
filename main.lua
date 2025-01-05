@@ -14,6 +14,7 @@ local Menu = require("ui/widget/menu")
 local Geom = require("ui/geometry")
 local _ = require("gettext")
 local ZoteroAPI = require("zoteroapi")
+local itemInfoViewer = require("zoteroiteminfo")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
 local ButtonDialog = require("ui/widget/buttondialog")
 local lfs = require("libs/libkoreader-lfs")
@@ -41,6 +42,8 @@ local ZoteroBrowser = Menu:extend{
     title_bar_left_icon = "appbar.search",
     covers_full_screen = true,
     return_arrow_propagation = false,
+    -- Slightly ugly using the option below, but better than truncated single line:
+    multilines_show_more_text = true,
 }
 
 
@@ -155,9 +158,27 @@ end
 
 function ZoteroBrowser:onMenuHold(item)
     if item.type == "item" then
-        table.insert(self.paths, item.key)
-        table.insert(self.keys, item.key)
-        self:displayAttachments(item.key)
+        --table.insert(self.paths, item.key)
+        --table.insert(self.keys, item.key)
+        --self:displayAttachments(item.key)
+        local itemDetails = ZoteroAPI.getItemWithAttachments(item.key)
+        local itemInfo = itemInfoViewer:new()
+        itemInfo:show(itemDetails, function(key)
+			local full_path, e = ZoteroAPI.downloadAndGetPath(key)
+			if e ~= nil or full_path == nil then
+				local b = InfoMessage:new{
+					text = _("Could not open file.") .. e,
+					timeout = 5,
+					icon = "notice-warning"
+				}
+				UIManager:show(b)
+			else
+				assert(full_path ~= nil)
+				local ReaderUI = require("apps/reader/readerui")
+				self.close_callback()
+				ReaderUI:showReader(full_path)
+			end
+		end)
     elseif item.type == "collection" then
         local is_offline_enabled = ZoteroAPI.isOfflineCollection(item.key)
         local button_label = "▢  Download this collection during sync"
@@ -361,6 +382,12 @@ function Plugin:addToMainMenu(menu_items)
                         end,
                     },
                     {
+                        text = _("Re-scan storage for local items"),
+                        callback = function()
+                            self:onZoteroRescanAction()
+                        end,
+                    },
+                    {
                         text = _("Resync entire collection"),
                         callback = function()
                             ZoteroAPI.resetSyncState()
@@ -428,7 +455,8 @@ function Plugin:addToMainMenu(menu_items)
 					local stats = ZoteroAPI.getStats()
 					UIManager:show(InfoMessage:new{
 						text = _("Plugin version: \n"..version..
-						"\n\nLibrary info:\n  Version:\t\t\t"..stats.libVersion..
+						"\n\nLibrary info:\n  Name:\t\t"..stats.name..
+						"\n  Version:\t"..stats.libVersion..
 						"\n  Last sync:  "..stats.lastSync..
 						"\n\nLibrary stats:\n\tCollections:\t\t"..stats.collections..
 						'\n\tTotal items:\t\t'..stats.items..
@@ -618,6 +646,20 @@ function Plugin:onZoteroReanalyzeAction()
         else
             Trapper:info(e)
         end
+
+    end)
+end
+
+function Plugin:onZoteroRescanAction()
+    if not self:checkInitialized() then
+        return
+    end
+    local Trapper = require("frontend/ui/trapper")
+    Trapper:wrap(function()
+        Trapper:info("Scanning local Zotero storage.")
+        local cnt = ZoteroAPI.scanStorage()
+		
+		Trapper:info("Found "..cnt.." local attachments.")
 
     end)
 end
