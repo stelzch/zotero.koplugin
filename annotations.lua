@@ -230,7 +230,7 @@ function Annotations.convertZoteroToKOReader(annotation, page_height)
     -- Convert Zotero time stamp to the format used by KOReader
     -- e.g. "2024-09-24T18:13:49Z" to "2024-09-24 18:13:49"
     local koAnnotation = {
-			["color"] = Z2K_COLORS[annotation.annotationColor] or defaultKColor,
+			["color"] = Z2K_COLORS[annotation.data.annotationColor] or defaultKColor,
             ["datetime"] = string.sub(string.gsub(annotation.data.dateModified, "T", " "), 1, -2), -- convert format
             ["drawer"] = Z2K_STYLE[annotation.data.annotationType] or "lighten",
             ["page"] = page,
@@ -283,7 +283,8 @@ function Annotations.createAnnotations(file_path, key, creation_callback)
     end
 
     for i = 1,#k_annotations do
-        if k_annotations[i].zoteroKey == nil then
+        if (k_annotations[i].zoteroKey == nil) and (k_annotations[i].drawer ~= nil) then
+            -- at some point should figure out what to do with annotations where k_annotations[i].drawer == 0
             local pageno = k_annotations[i].pageno
             local page_height = page_dimensions[pageno][2]
             local a = Annotations.convertKOReaderToZotero(k_annotations[i], page_height, key)
