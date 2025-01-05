@@ -1141,7 +1141,7 @@ function API.syncAllItems(progress_callback)
 		end
 	end
 	
-	----[[
+	--[[
 	-- try downloading My publications:
 	local page_url = API.userLibraryURL.."/publications/items?format=versions"
 	--page_url = API.userLibraryURL.."/searches"
