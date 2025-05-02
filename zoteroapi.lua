@@ -508,6 +508,8 @@ function API.getHeaders(api_key)
     }
 end
 
+-- Synchronize API.
+-- @param progress_callback Function that will be called periodically with updates. If it returns false, downloading attachments will be interrupted.
 function API.syncAllItems(progress_callback)
     local callback = progress_callback or function() end
     local db = API.openDB()
@@ -727,7 +729,12 @@ function API.batchDownload(progress_callback)
     while row ~= nil do
         local download_key = row[1]
         local filename = row[2]
-        progress_callback(string.format(_("Downloading attachment %i/%i"), i, item_count))
+        local go_on = progress_callback(string.format(_("Downloading attachment %i/%i"), i, item_count))
+
+        if not go_on then
+            break
+        end
+
         local path, e = API.downloadAndGetPath(download_key, nil)
 
         if e ~= nil then

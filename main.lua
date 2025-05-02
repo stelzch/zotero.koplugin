@@ -18,7 +18,7 @@ local MultiInputDialog = require("ui/widget/multiinputdialog")
 local ButtonDialog = require("ui/widget/buttondialog")
 local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
-
+local NetworkMgr = require("ui/network/manager")
 
 local DEFAULT_LINES_PER_PAGE = 14
 
@@ -521,15 +521,28 @@ function Plugin:onZoteroSyncAction()
     local Trapper = require("frontend/ui/trapper")
     Trapper:wrap(function()
         Trapper:info("Synchronizing Zotero library.")
-        local e = ZoteroAPI.syncAllItems(function(msg)
-            Trapper:info(msg)
+        local error = nil
+        local interrupted = false
+        local network_success = NetworkMgr:goOnlineToRun(function()
+            error = ZoteroAPI.syncAllItems(function(msg)
+                if not Trapper:info(msg) then
+                    interrupted = true
+                    return false
+                end
+
+                return true
+            end)
         end)
 
 
-        if e == nil then
+        if not network_success then
+            Trapper:info("Could not connect to network")
+        elseif error == nil and not interrupted then
             Trapper:info("Success")
+        elseif interrupted then
+            Trapper:info("Sync interrupted")
         else
-            Trapper:info(e)
+            Trapper:info(error)
         end
 
     end)
