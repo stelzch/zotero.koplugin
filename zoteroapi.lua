@@ -570,8 +570,9 @@ function API.displayCollection(key)
                 -- we search for
                 local parentItem = items[item.data.parentItem]
                 if parentItem ~= nil and table_contains(parentItem.data.collections, key) then
-                    local author = parentItem.meta.creatorSummary or "Unknown"
-                    local name = author .. " - " .. parentItem.data.title
+                    local author = parentItem.meta.creatorSummary or "Unknown Author"
+                    local title = parentItem.data.title or item.data.title or "Unknown Title"
+                    local name = author .. " - " .. title
 
                     table.insert(collectionItems, {
                         ["key"] = k,
@@ -610,8 +611,9 @@ function API.displaySearchResults(query)
             if item.data.parentItem ~= nil and items[item.data.parentItem] ~= nil then
                 local parentItem = items[item.data.parentItem]
                 if parentItem ~= nil then
-                    local author = parentItem.meta.creatorSummary or "Unknown"
-                    local name = author .. " - " .. parentItem.data.title
+                    local author = parentItem.meta.creatorSummary or "Unknown Author"
+                    local title = parentItem.data.title or item.data.title or "Unknown Title"
+                    local name = author .. " - " .. title
 
                     if parentItem.data.DOI ~= nil and parentItem.data.DOI ~= "" then
                         name = name .. " - " .. parentItem.data.DOI
