@@ -3,7 +3,7 @@
 Changed the sqlite data base structure such that it is aware of the relationship between different entities. Hopefully this will make it easier to propagate changes (e.g. deletion of a parent item removing attachments from view, etc).
 The layout of the DB is loosely based on the one of the Zotero desktop client without implementing the advanced features.
 To maintain compatibility the item info is still saved as a JSON blob in a separate table (itemData), which might become redundant at some point...
- 
+
 # Development plan:
 
 - [x] Get basic library sync functionality to work
@@ -30,12 +30,13 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 		- [] file type
 		- [] link type
 		- [] 'title'
-	
+
 - [x] Make an 'itemAnnotation' table
 	- [] use it to track synced version
 	- [x] use it to identify parent
 
 - [] remove redundant code
+	- Removed some of the redundant code in the sync routines but not fully checked
 
 - [] proper implementation of libraries
 	- [] set user and ID
@@ -43,7 +44,7 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 
 - [] Detect downloaded files by checking file system? E.g. after database reset everything gets downloaded agin even if there is a local copy...
 
-- [] Option to do a batabase re-check (to avoid complete re-sync)
+- [] Option to do a database re-check (to avoid complete re-sync)
 
 
 # Known issues:
@@ -51,7 +52,7 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 - [x] 'All items' or search results don't open when clicked (inherited from devStelzch)
 
 	Fixed 29/10/24
-	
+
 - [x] Search returns deleted items (inherited from devStelzch)
 
 	Fixed 29/10/24
@@ -60,9 +61,9 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 	- Plan: use 'sync' column in collections table
 	[x] use synced column in collections table
 	[x] change routines that select offline collections to update 'synced' column
-	
+
 	Re-enabled 04/11/24
-	
+
 - [x] Opening non-pdf files currently leads to a crash if there are annotations as the page size routines do not work
 
 	Fixed
@@ -76,13 +77,13 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 	- 'collections' table is empty after re-sync for some reason. [I think this was bug in my code]
 	- Workaround: delete zotero.db
 	- Plan: maybe implement this programatically: delete (or better move db to backup file) to initiate re-sync?
-	
+
 - [] If an item has several attachments, the one opened by default (1st?) might not be the one you want
 	- Workaround: long click should present a list of all attachments
 	- Plan: define an order/default attachment? What does desktop client do?
-	
+
 - [x] Collection deletion not implemented yet; currently requires complete re-sync
 
 	- [] Basic implementation working: but for nested collections there are still issues
 
-- [] Deleting annotations on Zotero does not seem to propagate to KOReader plugin if it already had been synced before deletion
+- [x] Deleting annotations on Zotero does not seem to propagate to KOReader plugin if it already had been synced before deletion
