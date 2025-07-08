@@ -14,41 +14,46 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 
 	Rough implementation working 27/10/24
 
-- [] Fix known issues listed below
+- [ ] Fix known issues listed below
 
-- [] Saved searches?
+- [ ] Saved searches?
 
-- [] Support extra meta data, e.g. tags or all authors
+- [ ] Support extra meta data, e.g. tags or all authors
 
 ### Random coding details:
 
-- [] Make use of 'itemAttachments' table
+- [ ] Make use of 'itemAttachments' table
 	- [x] use it to track synced version
-	- [] use it to identify children
-	- [] Store all attachment details in there?
-		- [] file name
-		- [] file type
-		- [] link type
-		- [] 'title'
+	- [ ] use it to identify children
+	- [ ] Store all attachment details in there?
+		- [ ] file name
+		- [ ] file type
+		- [ ] link type
+		- [ ] 'title'
 
 - [x] Make an 'itemAnnotation' table
-	- [] use it to track synced version
+	- [ ] use it to track synced version
 	- [x] use it to identify parent
 
-- [] remove redundant code
-	- Removed some of the redundant code in the sync routines but not fully checked
+- [x] remove redundant code
+	- Removed majority of redundant code, just need left some placeholder methods if they need to be re-implemented in the future
 
-- [] proper implementation of libraries
-	- [] set user and ID
-	- [] use it to store version
+- [ ] proper implementation of libraries
+	- [ ] set user and ID
+	- [ ] use it to store version
 
-- [] Detect downloaded files by checking file system? E.g. after database reset everything gets downloaded agin even if there is a local copy...
+- [ ] Detect downloaded files by checking file system? E.g. after database reset everything gets downloaded agin even if there is a local copy...
 
-- [] Option to do a database re-check (to avoid complete re-sync)
+- [ ] Option to do a database re-check (to avoid complete re-sync)
 
 
 # Known issues:
-
+- [ ] Changing the color of an annotation on the device is not syncing with the server. It does work the other way around
+- [ ] If an item has several attachments, the one opened by default (1st?) might not be the one you want
+	- Workaround: long click should present a list of all attachments
+	- Plan: define an order/default attachment? What does desktop client do?
+- [ ] On device (KoBo Elipsa) the Sync complete message will not show up sometimes, however the sync will be succesful
+- [ ] Basic implementation working: but for nested collections there are still issues
 - [x] 'All items' or search results don't open when clicked (inherited from devStelzch)
 
 	Fixed 29/10/24
@@ -78,12 +83,8 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 	- Workaround: delete zotero.db
 	- Plan: maybe implement this programatically: delete (or better move db to backup file) to initiate re-sync?
 
-- [] If an item has several attachments, the one opened by default (1st?) might not be the one you want
-	- Workaround: long click should present a list of all attachments
-	- Plan: define an order/default attachment? What does desktop client do?
 
 - [x] Collection deletion not implemented yet; currently requires complete re-sync
 
-	- [] Basic implementation working: but for nested collections there are still issues
 
 - [x] Deleting annotations on Zotero does not seem to propagate to KOReader plugin if it already had been synced before deletion
