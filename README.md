@@ -9,19 +9,17 @@ This addon for [KOReader](https://github.com/koreader/koreader) allows you to vi
 
 ## Features
 * Synchronization via Zotero Web API
-* Display main bibliographical information for items
 * Open attached PDF/EPUB/HTML files
-* Download Zotero annotations of pdf files
-* Upload new KOReader annotations on pdf files to Zotero
+* Sync annotations from Zotero to KOReader and the other way around (See limitations section)
 * Automatically download items of selected collections at sync time
 * Supports WebDAV storage backend
 * Search entries by the title of the publication or name of the first author.
 
 ### Limitations
 
+* The plugin will sync annotations both ways. It supports deletions but changes (i.e., enlarging or modifying an annotation) are not yet supported
+* Syncing of annotations requires opening the file from Zotero browse, opening it from recents will not sync annotations. Additionally, the file must be closed in KOReader before syncing for annotations to be sent to the server at sync time
 * Annotations only work for pdf files, not epub or other formats
-* Only text highlights (and associated text notes) are currently supported
-* This plugin _only supports uploading new annotations_ made with KOReader to Zotero. Changes and deletions made in KOReader will not be synchronized. But changes made in Zotero will be synchronised.
 * Search function currently quite limited, no real access to full author lists, DOIs, tags, etc.
 
 
@@ -48,13 +46,13 @@ Items without a collection will be shown in the top level.
 
 **Tapping** will open a sub-collection or try to open one of the attachments associated with the item.
 If it is not yet available locally (or out of date) it will **download** it from the zotero server.
-When opening an item from the Zotero brower it will also check its Zotero annotations (according to the local database) and attach supported annotations to the item.
- 
-You can also **long-press** on items. The action depends on what type of item is selected:
-- Collection: Show a dialog which allows you to set this collection as an offline collection. 
-- Item: Show bibliographical information for the item as well as abstract and tags and a list of *all* (supported) attachments of this item
+When opening an item from the Zotero Browser it will also check its Zotero annotations (according to the local database) and attach supported annotations to the item.
 
-You can **search** the database by clicking on the magnifying glass icon in the top left corner. 
+You can also **long-press** on items. The action depends on what type of item is selected:
+- Collection: Show a dialog which allows you to set this collection as an offline collection.
+- Item: Show a list of *all* (supported) attachments of this item
+
+You can **search** the databse by clicking on the magnifying glass icon in the top left corner.
 
 **Note:** you can associate this 'Browse' action with a gesture by going to
 'Top Menu -> Settings (cogwheel) -> Taps and gestures -> Gesture manager'
@@ -75,15 +73,13 @@ In detail 'synchronize' entails
 
 - Re-analyze local items will go through all the items in the local database and re-check which ones have supported attachments, are attachments themselves or are relevant annotations. Depending on your collection size this can take quite some time, but is still much faster then a full re-sync and does not need any internet connection.
 
-- Resync entire collection: only meant as a last resort as this will delete the complete local database and resynchronize everything from the zotero server.
-
-- Re-scan the local storage to check for downloaded attachment files. Useful after resyncing the complete library, as this will loose info about local items in the database.
+- Resync entire collection: only meant as a last resort as this will delete the complete local database and resynchronize everything from the Zotero server.
 
 ### Settings
 
 - Configure Zotero account: This needs to be configured before you can synchronise your Zotero library. Enter UserID (8 digit number) and the API key here.
 
-- Webdav settings: If you are using webdav use the 3 corresponding menu items to set the credentials, test them and enable support. 
+- Webdav settings: If you are using webdav use the 3 corresponding menu items to set the credentials, test them and enable support.
 
 
 ### About/Info
@@ -114,8 +110,7 @@ return {
 ```
 ### Misc
 
-In it's default configuration KOReader seems to open a dialog asking whether to write annotations into the pdf file. 
-Do *not* write annotation to the file.
-It is probably most convenient to disable this dialog by going to
-'Top Menu -> Settings (cogwheel) -> Document -> Save document (write highlights into PDF)' and ticking 'Disable'
+In it's default configuration KOReader seems to open a dialog asking whether to write annotations into the pdf file. Do *not* write annotation to the file. The plugin automatically disables this dialog for files opened rom the Zotero Browser. This setting can be modified in the Zotero plugin settings.
 
+Alternatively, you can disable this for all files by going to
+'Top Menu -> Settings (cogwheel) -> Document -> Save document (write highlights into PDF)' and ticking 'Disable'
