@@ -1,5 +1,9 @@
 # Change Log
 
+## JD 0.5 - 2025-10-07
+### Changed
+- Removed sqlite json functions in queries and moved them to be processed by Lua given latest version of KOReader does not include the JSON package
+
 ## [JA 1.0 RC4] - 2025-07-07
 ### Added
 - Added use of network manager when connecting to prevent connection errors and toggling automatic wifi connection
