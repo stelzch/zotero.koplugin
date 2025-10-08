@@ -2,9 +2,17 @@
 
 Changed the sqlite data base structure such that it is aware of the relationship between different entities. Hopefully this will make it easier to propagate changes (e.g. deletion of a parent item removing attachments from view, etc).
 The layout of the DB is loosely based on the one of the Zotero desktop client without implementing the advanced features.
-To maintain compatibility the item info is still saved as a JSON blob in a separate table (itemData), which might become redundant at some point...
+To maintain compatibility the item info is still saved as a JSON blob in a separate table (itemData), which might become redundant at some point... **Note: Need to review if this is still the case after multiple updates and if database can be simplified**
 
 # Development plan:
+
+- [ ] Keep track and allow to open recent documents from plugin
+
+- [ ] Fix known issues listed below
+
+- [ ] Saved searches?
+
+- [ ] Support extra meta data, e.g. tags or all authors
 
 - [x] Get basic library sync functionality to work
 
@@ -12,13 +20,15 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 
 - [x] Display Zotero annotations on Koreader
 
-	Rough implementation working 27/10/24
-
-- [ ] Fix known issues listed below
-
-- [ ] Saved searches?
-
-- [ ] Support extra meta data, e.g. tags or all authors
+# Known issues:
+- [ ] When a file is opened from History / FileBrowser even after sync, the sdr is not updated
+- [ ] Changing the color of an annotation on the device is not syncing with the server. It does work the other way around
+- [ ] If an item has several attachments, the one opened by default (1st?) might not be the one you want
+	- Workaround: long click should present a list of all attachments
+	- Plan: define an order/default attachment? What does desktop client do?
+- [ ] On device (KoBo Elipsa) the Sync complete message will not show up sometimes, however the sync will be succesfull
+- [ ] Basic implementation working: but for nested collections there are still issues
+- [x] 'All items' or search results don't open when clicked (inherited from devStelzch)
 
 ### Random coding details:
 
@@ -47,14 +57,6 @@ To maintain compatibility the item info is still saved as a JSON blob in a separ
 - [ ] Option to do a database re-check (to avoid complete re-sync)
 
 
-# Known issues:
-- [ ] Changing the color of an annotation on the device is not syncing with the server. It does work the other way around
-- [ ] If an item has several attachments, the one opened by default (1st?) might not be the one you want
-	- Workaround: long click should present a list of all attachments
-	- Plan: define an order/default attachment? What does desktop client do?
-- [ ] On device (KoBo Elipsa) the Sync complete message will not show up sometimes, however the sync will be succesful
-- [ ] Basic implementation working: but for nested collections there are still issues
-- [x] 'All items' or search results don't open when clicked (inherited from devStelzch)
 
 	Fixed 29/10/24
 
