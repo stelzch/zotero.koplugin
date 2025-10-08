@@ -188,7 +188,8 @@ VALUES
 ---- and local version must be lower than remote version (otherwise its considered up-to-date)
 --AND coalesce((SELECT version FROM attachment_versions WHERE attachment_versions.key = attachment_data.key), 0) < jsonb_extract(attachment_data.value, '$.version');
 --[[
--- select all pdf attachments present locally
+-- NOTE: This VIEW is currently unused and kept for reference
+-- select all pdf attachments present locally (would need JSON parsing in Lua if used)
 local ZOTERO_CREATE_VIEWS = [[
 CREATE TEMPORARY TABLE IF NOT EXISTS supported_link_types (type TEXT);
 INSERT INTO supported_link_types(type) VALUES ('imported_file'), ('imported_url') ON CONFLICT DO NOTHING;
@@ -196,12 +197,9 @@ INSERT INTO supported_link_types(type) VALUES ('imported_file'), ('imported_url'
 CREATE TEMPORARY VIEW IF NOT EXISTS local_pdf_items AS
 SELECT
     items.key AS key,
-    jsonb_extract(items.value, '$.data.filename') AS filename
+    value
 FROM attachment_versions
-LEFT JOIN items ON attachment_versions.key = items.key
-WHERE
-(jsonb_extract(items.value, '$.data.linkMode') IN (SELECT type FROM supported_link_types)) AND
-(jsonb_extract(items.value, '$.data.contentType') = 'application/pdf');
+LEFT JOIN items ON attachment_versions.key = items.key;
 ]]
 --]]
 
@@ -229,7 +227,7 @@ DELETE FROM items WHERE key IS ?1
 ]]
 
 local ZOTERO_DB_UPDATE_ITEMDATA = [[
-INSERT INTO itemData(itemID, value) SELECT itemID,jsonb(?2) FROM items WHERE key IS ?1
+INSERT INTO itemData(itemID, value) SELECT itemID,?2 FROM items WHERE key IS ?1
 ON CONFLICT DO UPDATE SET value = excluded.value;
 ]]
 
@@ -253,7 +251,7 @@ local ZOTERO_GET_COLLECTION_VERSION = [[ SELECT version, collectionID FROM colle
 
 local ZOTERO_GET_DB_VERSION = [[ PRAGMA user_version; ]]
 
-local ZOTERO_GET_ITEM = [[ SELECT json(value) 	FROM
+local ZOTERO_GET_ITEM = [[ SELECT value 	FROM
 		itemData INNER JOIN items ON itemData.itemID = items.itemID WHERE items.key = ?; ]]
 
 local ZOTERO_GET_OFFLINE_COLLECTION = [[
@@ -287,32 +285,8 @@ FROM (
 	ORDER By colname)
 UNION ALL
 SELECT
-	key,
-	name,
-	type
-FROM (
-	SELECT
-	   items.key,
---		jsonb_extract(value, '$.data.title') AS title,
-		---- if possible, prepend creator summary
-		coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') || jsonb_extract(value, '$.data.title') AS name,
-		iif(items.itemTypeID = 3, 'attachment', 'item') AS type
-	FROM
-		itemData INNER JOIN items ON itemData.itemID = items.itemID, cid
-	WHERE
-		itemData.itemID IN (
-			SELECT itemID FROM collectionItems,cid WHERE collectionID = cid.ID
-		)
-	ORDER BY name
-);
-]]
-
-local ZOTERO_GET_COLLECTION_ITEMS = [[
-WITH cid AS (SELECT collectionID AS ID FROM collections WHERE key = ?1)
-SELECT
-   items.key,
-	---- if possible, prepend creator summary
-	coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') || jsonb_extract(value, '$.data.title') AS title,
+	items.key,
+	value,
 	iif(items.itemTypeID = 3, 'attachment', 'item') AS type
 FROM
 	itemData INNER JOIN items ON itemData.itemID = items.itemID, cid
@@ -321,7 +295,21 @@ WHERE
 		SELECT itemID FROM collectionItems,cid WHERE collectionID = cid.ID
 	)
 ;
---ORDER BY title);
+]]
+
+local ZOTERO_GET_COLLECTION_ITEMS = [[
+WITH cid AS (SELECT collectionID AS ID FROM collections WHERE key = ?1)
+SELECT
+   items.key,
+	value,
+	iif(items.itemTypeID = 3, 'attachment', 'item') AS type
+FROM
+	itemData INNER JOIN items ON itemData.itemID = items.itemID, cid
+WHERE
+	itemData.itemID IN (
+		SELECT itemID FROM collectionItems,cid WHERE collectionID = cid.ID
+	)
+;
 ]]
 
 local ZOTERO_GET_COLLECTION_FOR_ITEM = [[
@@ -338,8 +326,7 @@ WHERE
 local ZOTERO_GET_OFFLINE_COLLECTION_ATTACHMENTS = [[
 SELECT
    items.key,
-	---- if possible, prepend creator summary
-	coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') || jsonb_extract(value, '$.data.title') AS title,
+	value,
 	iif(items.itemTypeID = 3, 'attachment', 'item') AS type
 FROM
 	itemData INNER JOIN items ON itemData.itemID = items.itemID
@@ -358,25 +345,21 @@ WHERE
 local ZOTERO_SEARCH_ITEMS = [[
 SELECT
     key,
-    -- if possible, prepend creator summary
-    coalesce(jsonb_extract(value, '$.meta.creatorSummary') || ' - ', '') || jsonb_extract(value, '$.data.title') AS title,
+    value,
 	iif(itemTypeID = 3, 'attachment', 'item') AS type
 FROM itemData INNER JOIN items ON itemData.itemID = items.itemID
 WHERE
 	itemData.itemID IN (SELECT parentItemID FROM itemAttachments)
-AND title LIKE ?1
-ORDER BY title;
+;
 ]]
 
 local ZOTERO_GET_ITEM_ATTACHMENTS = [[
 SELECT
 	key,
-	jsonb_extract(value, '$.data.filename') AS filename,
-	(jsonb_extract(value, '$.data.contentType') = 'application/pdf') AS is_pdf
+	value
 FROM (itemAttachments INNER JOIN itemData ON itemData.itemID = itemAttachments.itemID) INNER JOIN items ON itemData.itemID = items.itemID
 WHERE
 	itemAttachments.parentItemID IN (SELECT itemID FROM items WHERE key = ?1);
---ORDER BY is_pdf DESC, filename ASC;
 ]]
 
 local ZOTERO_GET_ITEM_ANNOTATIONS_INFO = [[
@@ -428,11 +411,11 @@ local ZOTERO_SET_ATTACHMENT_LASTSYNC = [[
 UPDATE itemAttachments SET lastSync = unixepoch('now') WHERE itemID IN (SELECT itemID FROM items WHERE key = ?);
 ]]
 
--- Return key, filename and lastSync for all locally synced attachments.
+-- Return key, value (JSON) and lastSync for all locally synced attachments.
 local ZOTERO_GET_LOCAL_ATTACHMENT = [[
 SELECT
 	key,
-	jsonb_extract(value, '$.data.filename'),
+	value,
 	lastSync
 FROM (itemAttachments INNER JOIN itemData ON itemData.itemID = itemAttachments.itemID) INNER JOIN items ON itemData.itemID = items.itemID
 WHERE itemAttachments.syncedVersion > 0;
@@ -1224,7 +1207,7 @@ function API.checkItemData(progressCallBack)
 	local frac = 100 / stats0.items
 	local dStep = math.max(math.floor(stats0.items / 100), 10)
 
-	local stmt = db:prepare([[SELECT json(value) FROM
+	local stmt = db:prepare([[SELECT value FROM
     		itemData INNER JOIN items ON itemData.itemID = items.itemID]])
 
 	local stmt_update_collectionItems = db:prepare(ZOTERO_DB_UPDATE_COLLECTION_ITEMS)
@@ -1369,12 +1352,29 @@ function API.getItemAttachments(key)
 	local items = {}
 
 	for i = 1, nr do
+		local item_key = result[1][i]
+		local json_value = result[2][i]
+
+		-- Parse JSON to extract filename
+		local item_data = JSON.decode(json_value)
+		local filename = item_data.data and item_data.data.filename or ""
+		local is_pdf = item_data.data and item_data.data.contentType == 'application/pdf'
+
 		table.insert(items, {
-			["key"] = result[1][i],
-			["text"] = result[2][i],
+			["key"] = item_key,
+			["text"] = filename,
 			["type"] = 'attachment',
+			["is_pdf"] = is_pdf,
 		})
 	end
+
+	-- Sort by is_pdf (PDFs first), then by filename
+	table.sort(items, function(a, b)
+		if a.is_pdf ~= b.is_pdf then
+			return a.is_pdf
+		end
+		return a.text < b.text
+	end)
 
 	return items
 end
@@ -1557,10 +1557,27 @@ function API.displayCollection(key)
 	local result = {}
 	local row, _ = stmt:step({}, {})
 	while row ~= nil do
+		local item_key = row[1]
+		local text = row[2]
+		local item_type = row[3]
+
+		-- For items (not collections), row[2] is JSON that needs to be parsed
+		if item_type ~= 'collection' then
+			local item_data = JSON.decode(text)
+			-- Construct display name: prepend creator summary if available
+			local creator_summary = item_data.meta and item_data.meta.creatorSummary or ""
+			local title = item_data.data and item_data.data.title or ""
+			if creator_summary ~= "" then
+				text = creator_summary .. " - " .. title
+			else
+				text = title
+			end
+		end
+
 		table.insert(result, {
-			["key"] = row[1],
-			["text"] = row[2],
-			["type"] = row[3],
+			["key"] = item_key,
+			["text"] = text,
+			["type"] = item_type,
 		})
 		--print(row[1], row[2], row[3])
 		row = stmt:step(row)
@@ -1578,20 +1595,42 @@ function API.displaySearchResults(query)
 	stmt:reset()
 	stmt:clearbind()
 
-	stmt:bind1(1, queryExpr)
-
 	local result = {}
 	local row, _ = stmt:step({}, {})
 	while row ~= nil do
-		table.insert(result, {
-			["key"] = row[1],
-			["text"] = row[2],
-			["type"] = row[3],
-		})
+		local item_key = row[1]
+		local json_value = row[2]
+		local item_type = row[3]
+
+		-- Parse JSON to extract title and creator summary
+		local item_data = JSON.decode(json_value)
+		local creator_summary = item_data.meta and item_data.meta.creatorSummary or ""
+		local title = item_data.data and item_data.data.title or ""
+
+		-- Construct display text
+		local text
+		if creator_summary ~= "" then
+			text = creator_summary .. " - " .. title
+		else
+			text = title
+		end
+
+		-- Filter based on query match (case-insensitive)
+		if text:lower():find(query:lower(), 1, true) then
+			table.insert(result, {
+				["key"] = item_key,
+				["text"] = text,
+				["type"] = item_type,
+			})
+		end
 
 		row = stmt:step(row)
 	end
 	stmt:close()
+
+	-- Sort results by text
+	table.sort(result, function(a, b) return a.text < b.text end)
+
 	--print(JSON.encode(result))
 	return result
 end
@@ -1685,8 +1724,12 @@ function API.syncAnnotations(progress_callback)
 		Annotations.setDefaultColor(defaultColor)
 		for i = 1, item_count do
 			local key = files[1][i]
-			local filename = files[2][i]
+			local json_value = files[2][i]
 			local db_ts = tonumber(files[3][i])
+
+			-- Parse JSON to extract filename
+			local item_data = JSON.decode(json_value)
+			local filename = item_data.data and item_data.data.filename or ""
 
 			local file_path = API.storage_dir .. "/" .. key .. "/" .. filename
 			-- Check time of last modification
