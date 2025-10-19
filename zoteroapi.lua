@@ -1028,7 +1028,7 @@ function API.fetchZoteroItems(since, progress_callback)
                     --if #item.data.collections > 1 then print("Item "..item.key.." is in ", #item.data.collections , " collections: ") end
                     if item.data.collections[1] == nil then -- no collection specified: put in root directory
                         stmt_update_collectionItems:reset():bind("/", item.key):step()
-                    else                     -- some items might be in more than one collection, so loop over collections
+                    else                                    -- some items might be in more than one collection, so loop over collections
                         for i, coll in pairs(item.data.collections) do
                             -- This works, but maybe better check if collection exists first? Then could delete item if collection no longer there...
                             stmt_update_collectionItems:reset():bind(coll, item.key):step()
@@ -1043,7 +1043,7 @@ function API.fetchZoteroItems(since, progress_callback)
                     and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType)
                 then
                     attachments[key] = item.data.parentItem or
-                    key                             -- if there is no parent item then use the item as its own parent
+                        key -- if there is no parent item then use the item as its own parent
                 elseif
                     item.data.itemType == "annotation"
                     and table_contains(annotationTypes, item.data.annotationType)
@@ -1270,7 +1270,7 @@ function API.checkItemData(progressCallBack)
             --if #item.data.collections > 1 then print("Item "..item.key.." is in ", #item.data.collections , " collections: ") end
             if item.data.collections[1] == nil then -- no collection specified: put in root directory
                 stmt_update_collectionItems:reset():bind("/", item.key):step()
-            else                           -- some items might be in more than one collection, so loop over collections
+            else                                    -- some items might be in more than one collection, so loop over collections
                 for i, coll in pairs(item.data.collections) do
                     -- This works, but maybe better check if collection exists first? Then could delete item if collection no longer there...
                     stmt_update_collectionItems:reset():bind(coll, item.key):step()
@@ -1282,7 +1282,7 @@ function API.checkItemData(progressCallBack)
         -- If so, add it to the relevant table
         if item.data.itemType == "attachment" and table_contains(SUPPORTED_MEDIA_TYPES, item.data.contentType) then
             attachments[item.key] = item.data.parentItem or
-            item.key                                        -- if there is no parent item then use the item as its own parent
+                item.key -- if there is no parent item then use the item as its own parent
         elseif item.data.itemType == "annotation" and table_contains(annotationTypes, item.data.annotationType) then
             annotations[item.key] = item.data.parentItem
         end
@@ -1859,7 +1859,7 @@ function API.syncAnnotations(progress_callback)
                     end
 
                     -- Create new annotations
-                    local fails = Annotations.createAnnotations(file_path, key, API.createItems)
+                    local fails, e = Annotations.createAnnotations(file_path, key, API.createItems)
 
                     -- Only update last sync if both operations succeeded
                     if fails == 0 and delete_fails == 0 then
@@ -1867,6 +1867,7 @@ function API.syncAnnotations(progress_callback)
                     else
                         if fails > 0 then
                             logger.info("Zotero: Failed annotation uploads: ", fails)
+                            logger.info("Data for failed annotation uploads: ", e)
                         end
                     end
                 end
