@@ -1176,6 +1176,14 @@ end
 function API.syncAllItems(progress_callback)
     local callback = progress_callback or function() end
 
+    -- Error tracking structure for sync summary
+    local sync_stats = {
+        annotation_upload_fails = 0,
+        annotation_delete_fails = 0,
+        file_download_fails = 0,
+        failed_downloads = {}  -- stores {filename, error} pairs
+    }
+
     local db = API.openDB()
     local since = API.getUserLibraryVersion()
     --logger.info("Local Zotero lib version: "..since)
@@ -1190,7 +1198,9 @@ function API.syncAllItems(progress_callback)
     if since > 0 then
         -- try to sync back first, so that any changes will be recorded when we update the db later on
         if API.access.user.write and API.access.user.notes then
-            API.syncAnnotations()
+            local upload_fails, delete_fails = API.syncAnnotations()
+            sync_stats.annotation_upload_fails = upload_fails or 0
+            sync_stats.annotation_delete_fails = delete_fails or 0
         else
             err = "Zotero: API key does not have write access!"
             logger.warn(err)
@@ -1227,11 +1237,47 @@ function API.syncAllItems(progress_callback)
 
     API.setUserLibraryVersion(r)
 
-    API.batchDownload(callback)
+    local download_fails, failed_downloads = API.batchDownload(callback)
+    sync_stats.file_download_fails = download_fails or 0
+    sync_stats.failed_downloads = failed_downloads or {}
 
     API.getStats()
+
+    -- Format sync summary with error counts
+    local function formatSyncSummary()
+        local total_errors = sync_stats.annotation_upload_fails +
+                            sync_stats.annotation_delete_fails +
+                            sync_stats.file_download_fails
+
+        if total_errors == 0 then
+            return nil  -- No errors to report
+        end
+
+        local parts = {}
+        table.insert(parts, string.format("\n%d total error(s):", total_errors))
+
+        if sync_stats.annotation_upload_fails > 0 then
+            table.insert(parts, string.format("- %d annotation upload failure(s)", sync_stats.annotation_upload_fails))
+        end
+        if sync_stats.annotation_delete_fails > 0 then
+            table.insert(parts, string.format("- %d annotation deletion failure(s)", sync_stats.annotation_delete_fails))
+        end
+        if sync_stats.file_download_fails > 0 then
+            table.insert(parts, string.format("- %d file download failure(s)", sync_stats.file_download_fails))
+        end
+
+        return table.concat(parts, "\n")
+    end
+
     -- err might show error for annotation upload which we have ignored so far..
-    return err
+    local sync_summary = formatSyncSummary()
+    if err ~= nil and sync_summary ~= nil then
+        return err .. sync_summary
+    elseif sync_summary ~= nil then
+        return sync_summary
+    else
+        return err
+    end
 end
 
 ---------------------
@@ -1570,6 +1616,11 @@ function API.batchDownload(progress_callback)
     local result, item_count = stmt:reset():resultset()
 
     logger.info("Zotero:", item_count, "offline items to download")
+
+    -- Track download failures
+    local download_fails = 0
+    local failed_downloads = {}
+
     for i = 1, item_count do
         local download_key = result[1][i]
         local filename = result[2][i]
@@ -1578,8 +1629,13 @@ function API.batchDownload(progress_callback)
 
         if e ~= nil then
             progress_callback(string.format(_("Error downloading attachment %s: %s"), filename, e))
+            download_fails = download_fails + 1
+            table.insert(failed_downloads, {filename = filename, error = e})
         end
     end
+
+    -- Return error counts and details
+    return download_fails, failed_downloads
 end
 
 -- Return a table of entries of a collection.
@@ -1768,6 +1824,10 @@ function API.syncAnnotations(progress_callback)
     stmt:close()
     local stmt_ts = db:prepare(ZOTERO_SET_ATTACHMENT_LASTSYNC)
 
+    -- Track total errors across all files
+    local total_upload_fails = 0
+    local total_delete_fails = 0
+
     if item_count then
         local defaultColor = API.settings:readSetting("annotation_default_color")
         Annotations.setDefaultColor(defaultColor)
@@ -1861,6 +1921,10 @@ function API.syncAnnotations(progress_callback)
                     -- Create new annotations
                     local fails, e = Annotations.createAnnotations(file_path, key, API.createItems)
 
+                    -- Accumulate errors
+                    total_upload_fails = total_upload_fails + fails
+                    total_delete_fails = total_delete_fails + delete_fails
+
                     -- Only update last sync if both operations succeeded
                     if fails == 0 and delete_fails == 0 then
                         stmt_ts:reset():bind1(1, key):step()
@@ -1881,6 +1945,9 @@ function API.syncAnnotations(progress_callback)
             end
         end
     end
+
+    -- Return error counts
+    return total_upload_fails, total_delete_fails
 end
 
 -- Create a whole range of items.
