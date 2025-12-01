@@ -444,6 +444,10 @@ function API.downloadAndGetPath(key, download_callback)
         return nil, "Error: this item is not an attachment"
     end
 
+    if item.data.linkMode == "linked_file" then
+        return nil, "Error: this item is a linked attachment. Linked attachments are currently unsupported."
+    end
+
     local attachment = item
 
     local targetDir, targetPath = API.getDirAndPath(key)
