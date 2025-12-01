@@ -22,6 +22,7 @@ This addon for [KOReader](https://github.com/koreader/koreader) allows you to vi
 2. Obtain an API token for your account by generating a new key in your [Zotero Settings](https://www.zotero.org/settings/keys). Note the userID and the private key.
 3. Set your credentials for Zotero either directly in KOReader or edit the configuration file as described [below](#manual-configuration).
 
+In KOReader, the Zotero plugin will be visible in the search tab (magnifying glass icon) inside the top menu.
 
 ### Differences to previous  versions
 In previous versions, you had to copy your entire Zotero directory to your device.
