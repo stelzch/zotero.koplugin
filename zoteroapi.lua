@@ -448,6 +448,10 @@ function API.downloadAndGetPath(key, download_callback)
         return nil, "Error: this item is a linked attachment. Linked attachments are currently unsupported."
     end
 
+    if item.data.linkMode ~= "imported_file" then
+        return nil, "Error: unsupported link mode '" .. tostring(item.data.linkMode) .. "'."
+    end
+
     local attachment = item
 
     local targetDir, targetPath = API.getDirAndPath(key)
